@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+:root {
+  --background: #000000;
+  --foreground: #ededed;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Rendered markdown for the cleaned-up recipe (Tailwind preflight resets these). */
+.recipe-preview h1,
+.recipe-preview h2,
+.recipe-preview h3 {
+  font-weight: 600;
+  color: #fffbeb;
+  margin: 0.75em 0 0.35em;
+}
+.recipe-preview h1 { font-size: 1.15rem; }
+.recipe-preview h2 { font-size: 1.05rem; }
+.recipe-preview h3 { font-size: 0.95rem; }
+.recipe-preview p { margin: 0.5em 0; }
+.recipe-preview ul,
+.recipe-preview ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.recipe-preview ul { list-style: disc; }
+.recipe-preview ol { list-style: decimal; }
+.recipe-preview li { margin: 0.2em 0; }
+.recipe-preview em { color: #a1a1aa; }
