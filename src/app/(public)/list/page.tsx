@@ -12,28 +12,12 @@ export const metadata = {
  * filters live in a narrow left column on the grey background; the white
  * cards stack in the wider right column.
  */
-/** Strip markdown syntax and truncate — just enough recipe to peek out of a focused card. */
-function mdTeaser(md: string | null, title: string): string | null {
-  if (!md) return null;
-  let text = md
-    .replace(/^#{1,6}\s*/gm, "")
-    .replace(/\*\*?|__?/g, "")
-    .replace(/^\s*[-*+]\s+/gm, "· ")
-    .replace(/^\s*\d+\.\s+/gm, "")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-  // The markdown usually opens with the recipe's title — the card already shows it.
-  const firstBreak = text.indexOf("\n");
-  if (firstBreak !== -1 && text.slice(0, firstBreak).trim().toLowerCase() === title.trim().toLowerCase()) {
-    text = text.slice(firstBreak + 1).trim();
-  }
-  return text.slice(0, 360) || null;
-}
-
 export default async function IndexPage() {
   const recipes = await getPublishedRecipes();
 
-  // Slim payload for the client — no transcriptions or image URLs needed here.
+  // Slim payload for the client — no transcriptions or image URLs needed
+  // here. Attribution and ingredients are kept for search only; the cards
+  // themselves render as blank ruled index cards.
   const entries = recipes.map((r) => ({
     id: r.id,
     slug: r.slug,
@@ -41,7 +25,6 @@ export default async function IndexPage() {
     category: r.category,
     attribution: r.attribution,
     ingredients: r.ingredients,
-    teaser: mdTeaser(r.recipe_markdown, r.title),
   }));
 
   return (

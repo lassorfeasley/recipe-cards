@@ -3,38 +3,82 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+function GridIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-6 w-6"
+      aria-hidden
+    >
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+}
+
+function ListIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-6 w-6"
+      aria-hidden
+    >
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+    </svg>
+  );
+}
+
 const MODES = [
-  { href: "/", label: "Wall", hint: "Every card at a glance" },
-  { href: "/list", label: "Index", hint: "The recipes as a card index" },
-  { href: "/3d", label: "Box", hint: "The recipe box — coming soon", soon: true },
+  { href: "/", label: "Wall", hint: "Every card at a glance", icon: GridIcon },
+  {
+    href: "/list",
+    label: "Index",
+    hint: "The recipes as a card index",
+    icon: ListIcon,
+  },
 ];
 
-/** Minimal floating mode switcher for the public site. */
+/** Floating mode switcher for the public site: icon buttons, bottom right. */
 export default function ModeSwitch() {
   const pathname = usePathname();
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-0 z-40 flex justify-center">
-      <nav className="pointer-events-auto mt-3 flex items-center gap-1 rounded-full border border-zinc-800/80 bg-black/70 px-2 py-1 text-xs tracking-wide backdrop-blur transition-opacity hover:opacity-100 sm:opacity-70">
-        {MODES.map((m) => {
-          const active = m.href === "/" ? pathname === "/" : pathname.startsWith(m.href);
-          return (
-            <Link
-              key={m.href}
-              href={m.href}
-              title={m.hint}
-              className={`rounded-full px-3 py-1 transition-colors ${
-                active
-                  ? "bg-amber-100 text-black"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-              }`}
-            >
-              {m.label}
-              {m.soon && <span className="ml-1 text-[9px] text-zinc-500">soon</span>}
-            </Link>
-          );
-        })}
-      </nav>
-    </div>
+    <nav className="fixed right-5 bottom-5 z-40 flex items-center gap-2 rounded-2xl border border-zinc-800/80 bg-black/70 p-1.5 backdrop-blur">
+      {MODES.map((m) => {
+        const active =
+          m.href === "/" ? pathname === "/" : pathname.startsWith(m.href);
+        const Icon = m.icon;
+        return (
+          <Link
+            key={m.href}
+            href={m.href}
+            title={m.hint}
+            aria-label={m.label}
+            aria-current={active ? "page" : undefined}
+            className={`flex h-12 w-12 items-center justify-center rounded-xl transition-colors ${
+              active
+                ? "bg-amber-100 text-black"
+                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+            }`}
+          >
+            <Icon />
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

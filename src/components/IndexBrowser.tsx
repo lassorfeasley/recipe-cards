@@ -10,16 +10,35 @@ export interface IndexEntry {
   category: string | null;
   attribution: string | null;
   ingredients: string[] | null;
-  teaser: string | null;
 }
 
-/** Collapsed strip height / fully focused card height, in px. */
+/** Collapsed strip height, in px. */
 const MIN_H = 60;
-const MAX_H = 190;
+/**
+ * Fully focused card height: real index cards are 5×3, so the expanded
+ * height is 3/5 of the list's width (measured live in the update loop).
+ */
+const CARD_RATIO = 3 / 5;
 /** Distance (px) from the focus line over which a card decays back to a strip. */
 const FALLOFF = 330;
 /** Viewport y of the focus line — the top of the list, so card 1 opens at rest. */
 const FOCUS_TOP = 126;
+/**
+ * Viewport y where cards pin — the top card's resting position on load
+ * (the container's pt-24). Cards are sticky, so instead of scrolling off the
+ * top they stop at the stack and the cards after them slide up and pile on
+ * top (later DOM order paints above).
+ */
+const STACK_TOP = FOCUS_TOP - MIN_H / 2;
+/** Vertical offset between successive cards in the pile, in px. */
+const STAGGER = 3;
+/**
+ * Max cards visibly staggered at once. New arrivals pin STAGGER below the
+ * previous card until the pile is this deep; after that the pile stops
+ * growing (its top never leaves STACK_TOP) and the oldest cards shift north
+ * to overlap each other exactly, so only the 20 most recent slivers show.
+ */
+const STACK_VISIBLE = 20;
 
 /**
  * Client side of the Index mode. Cards are flat white rows on a dark page;
@@ -54,33 +73,94 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     });
   }, [entries, query, categories]);
 
-  // Scroll-driven fisheye: size every card from its distance to the focus line.
+  // Scroll-driven fisheye + pile stagger: size every card from its distance
+  // to the focus line, and assign each pinned card its slot in the pile.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
     let raf = 0;
+    let settleBudget = 0;
 
     const update = () => {
       raf = 0;
-      const focusY = FOCUS_TOP;
-      const cards = list.children as HTMLCollectionOf<HTMLElement>;
-      // Measure everything first so height writes don't skew later reads.
-      const tops: number[] = [];
-      for (const card of cards) tops.push(card.getBoundingClientRect().top);
+      // Only the card links — the list also holds the end-of-scroll spacer.
+      const cards = Array.from(list.children).filter(
+        (el): el is HTMLElement => el.tagName === "A"
+      );
+      if (cards.length === 0) return;
+
+      const maxH = Math.round(list.clientWidth * CARD_RATIO);
+      // The pile fans out over this many px; a card reaches full height this
+      // far before the focus line, so it's already full-size when it docks
+      // at the pile's lowest slot (no height jump on pinning).
+      const pileDepth = STAGGER * (STACK_VISIBLE - 1);
+
+      // Read phase. Rects report real sticky positions: a stuck card sits
+      // exactly at its assigned top, so "reached its assigned top" IS the
+      // pinned test — the browser does the flow math for us. Cards pin
+      // strictly in list order, so the pinned set is the leading run.
+      const tops = cards.map((c) => c.getBoundingClientRect().top);
+      let pinnedCount = 0;
+      while (
+        pinnedCount < cards.length &&
+        tops[pinnedCount] <=
+          (parseFloat(cards[pinnedCount].style.top) || STACK_TOP) + 0.5
+      ) {
+        pinnedCount++;
+      }
+
+      // Write phase. Pile slots, newest (deepest in the pile) card lowest:
+      // the most recent STACK_VISIBLE pinned cards fan out by STAGGER;
+      // anything older overlaps exactly at STACK_TOP. Pinned cards hold full
+      // height (constant, so the document doesn't churn); unpinned cards get
+      // the pile's next open slot so they ride in seamlessly, sized by their
+      // distance to the focus line.
+      const deepest = Math.min(pinnedCount - 1, STACK_VISIBLE - 1);
+      const nextSlot =
+        STACK_TOP + STAGGER * Math.min(pinnedCount, STACK_VISIBLE - 1);
+      let changed = false;
       for (let i = 0; i < cards.length; i++) {
-        // Distance from where the card's strip sits, so its own growth
-        // doesn't feed back into the measurement.
-        const d = Math.abs(tops[i] + MIN_H / 2 - focusY);
-        const t = Math.max(0, 1 - d / FALLOFF);
-        const ease = t * t * (3 - 2 * t); // smoothstep
-        cards[i].style.height = `${Math.round(MIN_H + (MAX_H - MIN_H) * ease)}px`;
+        let top: number;
+        let h: number;
+        if (i < pinnedCount) {
+          const fromNewest = pinnedCount - 1 - i;
+          top = STACK_TOP + STAGGER * Math.max(0, deepest - fromNewest);
+          h = maxH;
+        } else {
+          top = nextSlot;
+          const d = Math.max(
+            0,
+            Math.abs(tops[i] + MIN_H / 2 - FOCUS_TOP) - pileDepth
+          );
+          const t = Math.max(0, 1 - d / FALLOFF);
+          const ease = t * t * (3 - 2 * t); // smoothstep
+          h = Math.round(MIN_H + (maxH - MIN_H) * ease);
+        }
+        const hPx = `${h}px`;
+        const tPx = `${top}px`;
+        if (cards[i].style.height !== hPx || cards[i].style.top !== tPx) {
+          cards[i].style.height = hPx;
+          cards[i].style.top = tPx;
+          changed = true;
+        }
+      }
+      // Height writes change the document length and flow positions, which
+      // can change who's pinned — re-run until the layout settles (bounded,
+      // in case rounding makes two states ping-pong).
+      if (changed && settleBudget-- > 0) {
+        if (document.hidden) update();
+        else if (!raf) raf = requestAnimationFrame(update);
       }
     };
 
     const schedule = () => {
-      if (!raf) raf = requestAnimationFrame(update);
+      settleBudget = 10;
+      // rAF never fires while the tab is hidden — run synchronously there so
+      // the layout is right the moment the tab is shown.
+      if (document.hidden) update();
+      else if (!raf) raf = requestAnimationFrame(update);
     };
-    update();
+    schedule();
     window.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule, { passive: true });
     return () => {
@@ -101,7 +181,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const filtered = query.trim() !== "" || categories.size > 0;
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-10 px-4 pb-[80vh] pt-24 md:flex-row">
+    <div className="mx-auto flex max-w-5xl flex-col gap-10 px-4 pt-24 md:flex-row">
       {/* sidebar — sits directly on the dark background */}
       <aside className="shrink-0 md:sticky md:top-24 md:h-fit md:w-56">
         <h1 className="text-xs font-medium uppercase tracking-[0.35em] text-zinc-500">
@@ -163,7 +243,11 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         </p>
       </aside>
 
-      {/* the list */}
+      {/* the list. The end-of-scroll room must be a real child of this div
+          (not padding — sticky containment only spans the content box), so
+          the pile, including the last card fully expanded, stays pinned at
+          the stack line to the very end of the scroll instead of being
+          pushed up off the viewport. */}
       <div ref={listRef} className="flex min-w-0 flex-1 flex-col">
         {matches.length === 0 ? (
           <p className="pt-8 text-sm text-zinc-500">No recipes match.</p>
@@ -172,8 +256,8 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             <Link
               key={r.id}
               href={`/card/${r.slug}`}
-              className="relative block shrink-0 overflow-hidden bg-white px-6 outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-white"
-              style={{ height: MIN_H }}
+              className="sticky block shrink-0 overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)] outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-white"
+              style={{ height: MIN_H, top: STACK_TOP }}
             >
               <span
                 className="flex items-center justify-between gap-4"
@@ -184,30 +268,26 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                   {r.category ?? ""}
                 </span>
               </span>
-              {/* subtle fill behind the exposed recipe area, so the clipped edge
-                  reads as a crisp line against the next card's white title row */}
+              {/* blank index-card body: light blue ruled lines under the red
+                  header rule */}
               <span
-                className="pointer-events-none absolute inset-x-0 bottom-0 bg-zinc-50"
-                style={{ top: MIN_H }}
+                className="pointer-events-none absolute inset-x-0 bottom-0"
+                style={{
+                  top: MIN_H,
+                  background:
+                    "repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(112, 146, 190, 0.35) 23px, rgba(112, 146, 190, 0.35) 24px)",
+                }}
               />
               {/* the index card's red header rule — full bleed, doubles as the row separator */}
               <span
                 className="pointer-events-none absolute inset-x-0 z-10 h-px bg-[#c45850]/40"
                 style={{ top: MIN_H - 1 }}
               />
-              {r.attribution && (
-                <span className="relative block text-sm text-zinc-400">
-                  from the kitchen of {r.attribution}
-                </span>
-              )}
-              {r.teaser && (
-                <span className="relative mt-3 block whitespace-pre-line text-sm leading-6 text-zinc-500">
-                  {r.teaser}
-                </span>
-              )}
             </Link>
           ))
         )}
+        {/* end-of-scroll room, inside the sticky containing block */}
+        <div aria-hidden className="h-screen shrink-0" />
       </div>
     </div>
   );
