@@ -11,6 +11,112 @@ body {
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
+/* Infinite diagonal pan for the showcase wall, composed from two independent
+   seamless loops on the 2×2-tiled block. pan-y slides the content down by
+   exactly one grid copy per cycle; pan-x slides it left by exactly one tile
+   per cycle (50% is one copy/tile because the block is two copies tall and
+   two tiles wide, and the identical neighbor replaces it — seamless). Cards
+   drift down and to the left, along the card diagonal (durations set inline
+   cross one row and one column in equal time). */
+@keyframes showcase-pan-y {
+  from {
+    transform: translate3d(0, -50%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+@keyframes showcase-pan-x {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+.pan-y {
+  animation: showcase-pan-y linear infinite;
+}
+.pan-x {
+  animation: showcase-pan-x linear infinite;
+}
+/* Periodic flip wave. Duration must match WAVE_PERIOD in ShowcaseWall.tsx;
+   per-card --wd delays stagger it into a diagonal wave: each "\" diagonal
+   flips in lockstep, and the diagonal to the left trails by
+   WAVE_PERIOD/(2·TILE_COLS) (~0.33s). One cycle spans two 20-column
+   tile-widths of diagonals (40 steps), so the flip-over wave (starting at 0%)
+   and the flip-back wave (at 50%) are always 20 diagonals apart. Each flip
+   lasts 17.5% of the cycle (7 diagonal steps); with the sine in-out easing
+   the first and last step of that window are nearly flat, so ~5 adjacent
+   diagonals read as visibly rotating at staggered progress.
+   The flip is a single flattened transform, and the faces swap opacity at the
+   exact moments the card is edge-on (8.75% and 58.75%, the easing midpoints
+   of the flip segments), so no preserve-3d/backface-visibility is needed —
+   per-card 3D contexts overwhelmed the compositor and dropped tiles. */
+@keyframes card-wave {
+  0% {
+    transform: perspective(800px) rotateY(0deg);
+  }
+  17.5% {
+    transform: perspective(800px) rotateY(180deg);
+  }
+  50% {
+    transform: perspective(800px) rotateY(180deg);
+  }
+  67.5% {
+    transform: perspective(800px) rotateY(360deg);
+  }
+  100% {
+    transform: perspective(800px) rotateY(360deg);
+  }
+}
+@keyframes face-front-wave {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  8.75% {
+    opacity: 0;
+  }
+  58.75% {
+    opacity: 1;
+  }
+}
+@keyframes face-back-wave {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  8.75% {
+    opacity: 1;
+  }
+  58.75% {
+    opacity: 0;
+  }
+}
+.card-wave {
+  animation: card-wave 13.333s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation-delay: var(--wd, 0s);
+}
+.card-wave .face-front {
+  animation: face-front-wave 13.333s step-end infinite;
+  animation-delay: var(--wd, 0s);
+}
+.card-wave .face-back {
+  animation: face-back-wave 13.333s step-end infinite;
+  animation-delay: var(--wd, 0s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pan-y,
+  .pan-x,
+  .card-wave,
+  .card-wave .face-front,
+  .card-wave .face-back {
+    animation-play-state: paused !important;
+  }
+}
+
 /* Rendered markdown for the cleaned-up recipe (Tailwind preflight resets these). */
 .recipe-preview h1,
 .recipe-preview h2,
@@ -32,3 +138,29 @@ body {
 .recipe-preview ol { list-style: decimal; }
 .recipe-preview li { margin: 0.2em 0; }
 .recipe-preview em { color: #a1a1aa; }
+
+/* Rendered markdown on the printable page: same structure, ink-on-paper colors. */
+.recipe-print h1,
+.recipe-print h2,
+.recipe-print h3 {
+  font-weight: 600;
+  color: #18181b;
+  margin: 0.9em 0 0.35em;
+}
+.recipe-print h1 { font-size: 1.2rem; }
+.recipe-print h2 { font-size: 1.05rem; }
+.recipe-print h3 { font-size: 0.95rem; }
+.recipe-print p { margin: 0.5em 0; }
+.recipe-print ul,
+.recipe-print ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.recipe-print ul { list-style: disc; }
+.recipe-print ol { list-style: decimal; }
+.recipe-print li { margin: 0.2em 0; break-inside: avoid; }
+.recipe-print em { color: #52525b; }
+
+@page {
+  margin: 0.75in;
+}

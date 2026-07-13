@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Card, Extraction } from "@/lib/types";
 import ExtractionFields from "@/components/ExtractionFields";
+import { CARD_STATUS } from "@/lib/status";
 
 interface ReviewItem {
   card: Card & { batch_number: number };
@@ -315,6 +316,14 @@ export default function ReviewPage() {
             </p>
           )}
         </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 border-b border-zinc-900 px-3 py-2 text-[10px] text-zinc-500">
+          {(["cropped", "extracted", "reviewed", "published"] as const).map((s) => (
+            <span key={s} className="flex items-center gap-1" title={CARD_STATUS[s].help}>
+              <span className={`h-1.5 w-1.5 rounded-full ${CARD_STATUS[s].dot}`} />
+              {CARD_STATUS[s].label}
+            </span>
+          ))}
+        </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {items.map((i) => (
             <button
@@ -331,15 +340,8 @@ export default function ReviewPage() {
                 {i.extraction?.title ?? <em className="text-zinc-600">not extracted</em>}
               </span>
               <span
-                className={`h-2 w-2 shrink-0 rounded-full ${
-                  i.card.status === "published"
-                    ? "bg-emerald-400"
-                    : i.card.status === "reviewed"
-                      ? "bg-cyan-400"
-                      : i.extraction
-                        ? "bg-amber-400"
-                        : "bg-zinc-700"
-                }`}
+                className={`h-2 w-2 shrink-0 rounded-full ${CARD_STATUS[i.card.status].dot}`}
+                title={`${CARD_STATUS[i.card.status].label} — ${CARD_STATUS[i.card.status].help}`}
               />
             </button>
           ))}

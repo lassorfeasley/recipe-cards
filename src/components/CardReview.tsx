@@ -7,6 +7,19 @@ import type { Batch, Card, CropRect, Settings } from "@/lib/types";
 import { marginPx as computeMarginPx } from "@/lib/types";
 import { withRotationAboutCenter } from "@/lib/cropGeometry";
 import { renderCrop, canvasToJpeg, uploadCardImage } from "@/lib/cropExport";
+import ShortcutsHelp from "./ShortcutsHelp";
+
+const SHORTCUTS = [
+  { keys: "click pane", action: "Make that side active for keyboard input" },
+  { keys: "drag card", action: "Position the card under the fixed crop marks" },
+  { keys: "scroll", action: "Zoom" },
+  { keys: "arrows (+⇧)", action: "Nudge card 1px (10px)" },
+  { keys: "[ ] (+⇧)", action: "Rotate card 0.5° (0.1°)" },
+  { keys: "r", action: "Spin active face 180°" },
+  { keys: "s", action: "Swap front/back (card scanned back-up)" },
+  { keys: "enter", action: "Approve & go to next card" },
+  { keys: "n / p", action: "Next / previous card" },
+];
 
 const RefineCanvas = dynamic(() => import("./RefineCanvas"), { ssr: false });
 
@@ -302,6 +315,7 @@ export default function CardReview({ batchId }: { batchId: string }) {
 
         <div className="ml-auto flex items-center gap-2">
           {error && <span className="text-sm text-red-400">{error}</span>}
+          <ShortcutsHelp shortcuts={SHORTCUTS} />
           <button
             className={`${btn} ${swapped ? "border-amber-500 text-amber-300" : ""}`}
             onClick={() => setSwapped((v) => !v)}
@@ -309,7 +323,7 @@ export default function CardReview({ batchId }: { batchId: string }) {
           >
             ⇄ Swap F/B
           </button>
-          <button className={btn} onClick={resetCard}>
+          <button className={btn} onClick={resetCard} title="Discard adjustments and reload this card's saved crops">
             Reset
           </button>
           <button className={btn} onClick={() => goTo(idx - 1)} disabled={idx === 0}>
@@ -334,10 +348,9 @@ export default function CardReview({ batchId }: { batchId: string }) {
       </div>
 
       <div className="shrink-0 border-b border-zinc-900 bg-black px-4 py-1 text-[11px] text-zinc-600">
-        crop marks are fixed — you move the card · click a pane to make it active · drag = position
-        card · scroll = zoom · arrows = nudge card 1px (shift 10px) · [ ] = rotate card 0.5° (shift
-        0.1°) · r = spin 180° · s = swap front/back · enter = approve &amp; next · dashed line = card
-        edge, solid = export boundary
+        The crop marks stay put — <span className="text-zinc-400">drag the card</span> to position
+        it under them. The previews below show exactly what will be saved. Press{" "}
+        <kbd className="text-zinc-400">?</kbd> for keyboard shortcuts.
       </div>
 
       {/* editors */}

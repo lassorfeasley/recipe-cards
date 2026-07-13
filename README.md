@@ -1,6 +1,6 @@
 # Recipe Card Archive
 
-Local admin tool for digitizing ~300 handwritten recipe cards scanned in batches of ~9 cards (numbered folders, each with `Front.jpeg` + `Back.jpeg`).
+Admin tool + public site for digitizing ~300 handwritten recipe cards scanned in batches of ~9 cards (numbered folders, each with `Front.jpeg` + `Back.jpeg`).
 
 This is the **local, no-auth v1**: upload, crop, back-align, AI extraction, and review all run on your machine. Data lives in `data/` (SQLite + image files), which stands in for Supabase Postgres/Storage until hosting is added. The schema mirrors the planned Supabase schema so migration is mechanical.
 
@@ -14,7 +14,28 @@ cp .env.local.example .env.local   # add your ANTHROPIC_API_KEY
 npm run dev
 ```
 
-Open http://localhost:3000 (redirects to `/admin/batches`).
+Open http://localhost:3000 for the public site, or http://localhost:3000/admin for the
+admin tool (lands on the Library). The batch processing workflow lives behind the
+**+ Add batches** button in the admin header.
+
+## Public site
+
+Reads from Supabase with the **anon key**, so RLS is the gatekeeper: only published
+cards with reviewed extractions are visible. Three modes share one profile page:
+
+- **Wall** (`/`) — every card front on black, nothing else. Uses small
+  `front_thumb.jpg` thumbnails (480px wide) that sync generates and uploads alongside
+  each front image; `POST /api/sync {"thumbs":true}` backfills them for cards synced
+  before thumbnails existed.
+- **Index** (`/list`) — an alphabetical card index: a scrollable stack of paper cards
+  with just the title strip showing; hovering lifts a card out of the stack.
+- **Box** (`/3d`) — placeholder for the future 3D skeuomorphic recipe box.
+- **Profile** (`/card/[slug]`) — full-resolution flip card (tap to see the back),
+  category/attribution/ingredients, the cleaned-up markdown recipe, and an
+  "As she wrote it" verbatim transcription tab, with alphabetical prev/next nav.
+  The front image is the Open Graph image, so shared links unfurl with the card.
+
+Pages revalidate every 2 minutes, so newly published cards appear without a redeploy.
 
 ## Workflow
 
@@ -22,9 +43,11 @@ Open http://localhost:3000 (redirects to `/admin/batches`).
 2. **Align** (`1 · Align`) — front and back scans side by side, both auto-detected on load. If a whole scan reads upside-down, the **Flip front / Flip back / Flip both** buttons rotate the stored scan file(s) 180° — saved crops and 180° flags are transformed along with them. Backs are detected independently (scans can differ in canvas size when cards shift on the scanner bed) and matched to fronts by grid position, since cards were flipped in place. Boxes are fixed-size (drag/rotate only — all cards are standard index cards); selection is paired across the two panes. Adjust anything that detection missed, press `r` on a card whose back reads upside-down, then **Accept all** to save geometry and move on.
 3. **Review cards** (`2 · Review cards`) — one card pair at a time in a viewfinder: the crop marks are fixed and axis-aligned, and you move the CARD under them (drag/nudge/rotate, 180° spin for upside-down faces). If a card was scanned back-up, **⇄ Swap F/B** (or `s`) swaps which scan becomes the front vs. back at export. Each pane shows exactly the export framing, with everything outside masked to black, and the previews at the bottom show exactly what will be saved. **Approve** exports both faces to `cards/{id}/` and auto-advances to the next unapproved card; when every pair is approved the batch is complete.
 4. **Review** — "Extract all pending" runs Claude over front+back (2 concurrent, backoff on rate limits, running token/cost figure). Besides the verbatim transcription, extraction produces **ingredients** (lowercase tags, e.g. `flour, raisin`) and a **cleaned-up recipe** — the recipe rewritten in plain modern language as markdown (bulleted ingredients, numbered steps) with a Preview toggle in the form. Edit fields, `enter` approves and advances, `f` flips the image. **⇄ Swap front/back** fixes a card that was scanned back-up even after export: it swaps the exported `front.jpg`/`back.jpg` files on disk, the front/back transcriptions, and marks the card for re-sync. Approving, publishing, or swapping a card automatically pushes it to Supabase in the background (a status line under the sidebar buttons shows syncing/synced/failed); images are only re-uploaded when the exports changed.
-5. **Library** — a gallery of every exported card pair. Click a card to flip it front/back; click its title to open the **card profile** — a per-card admin view with the flip image, batch/slug/sync facts, the full metadata form (works even for cards with no extraction yet — saving creates a manual one), a **Re-scan metadata (AI)** button (confirms before replacing human-reviewed data), and publish/unpublish. Saving marks the metadata reviewed and syncs the card to Supabase. Search filters by title, transcription, attribution, or batch number. The **Sync to Supabase** button pushes everything up: batches/cards/latest-extractions are upserted every time (cheap), and card images are uploaded only when their exports changed since the last sync (re-approving a card marks it for re-upload; "Force full re-upload" pushes every image). Deletions are not propagated — remove rows/objects in Supabase manually if you delete cards after syncing.
+5. **Library** (home) — a gallery of every card pair, read **live from Supabase** when configured (images come from the public bucket, exactly what the future public site will see); falls back to local data offline. Click a card to flip it front/back; click its title to open the **card profile** — a per-card admin view with the flip image, batch/slug/sync facts, the full metadata form (works even for cards with no extraction yet — saving creates a manual one), a **Re-scan metadata (AI)** button (confirms before replacing human-reviewed data), and publish/unpublish. Saving marks the metadata reviewed and syncs the card to Supabase. Search filters by title, transcription, attribution, or batch number. The **Sync to Supabase** button pushes everything up: batches/cards/latest-extractions are upserted every time (cheap), and card images are uploaded only when their exports changed since the last sync (re-approving a card marks it for re-upload; "Force full re-upload" pushes every image). Deletions are not propagated — remove rows/objects in Supabase manually if you delete cards after syncing.
 
 ### Keyboard (align & card review)
+
+Press `?` on either screen for the in-app cheat-sheet.
 
 | Key | Action |
 | --- | --- |

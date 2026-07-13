@@ -4,18 +4,12 @@ import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { Card, Extraction } from "@/lib/types";
 import ExtractionFields from "@/components/ExtractionFields";
+import { CARD_STATUS } from "@/lib/status";
 
 interface CardDetail {
   card: Card & { batch_number: number };
   extraction: Extraction | null;
 }
-
-const statusPill: Record<string, string> = {
-  cropped: "bg-zinc-800 text-zinc-300",
-  extracted: "bg-cyan-950 text-cyan-300",
-  reviewed: "bg-emerald-950 text-emerald-300",
-  published: "bg-amber-950 text-amber-300",
-};
 
 export default function CardProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -143,8 +137,11 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
           ← Library
         </Link>
         <h1 className="text-xl font-semibold text-amber-50">{title}</h1>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] ${statusPill[card.status]}`}>
-          {card.status}
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] ${CARD_STATUS[card.status].pill}`}
+          title={CARD_STATUS[card.status].help}
+        >
+          {CARD_STATUS[card.status].label}
         </span>
         {message && <span className="ml-auto text-xs text-zinc-500">{message}</span>}
       </div>

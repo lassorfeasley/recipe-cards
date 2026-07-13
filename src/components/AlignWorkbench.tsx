@@ -9,6 +9,18 @@ import { marginPx as computeMarginPx } from "@/lib/types";
 import type { CropBox, CropCanvasHandle } from "./CropCanvas";
 import { detectCards } from "@/lib/detect";
 import { readingOrder, mirrorHorizontal, mirrorVertical } from "@/lib/cropGeometry";
+import ShortcutsHelp from "./ShortcutsHelp";
+
+const SHORTCUTS = [
+  { keys: "click pane", action: "Make that side active for keyboard input" },
+  { keys: "scroll / drag bg", action: "Zoom / pan" },
+  { keys: "tab / ⇧tab", action: "Next / previous card" },
+  { keys: "arrows (+⇧)", action: "Nudge box 1px (10px)" },
+  { keys: "[ ] (+⇧)", action: "Rotate box 0.5° (0.1°)" },
+  { keys: "r", action: "Back reads upside-down (180° at export)" },
+  { keys: "delete", action: "Remove selected card pair" },
+  { keys: "f", action: "Fit view" },
+];
 
 const CropCanvas = dynamic(() => import("./CropCanvas"), { ssr: false });
 
@@ -374,49 +386,51 @@ export default function AlignWorkbench({ batchId }: { batchId: string }) {
 
         <div className="mx-2 h-5 w-px bg-zinc-800" />
 
+        <span className="text-[10px] uppercase tracking-wider text-zinc-600">Cards</span>
+        <button className={btn} onClick={runAutoDetect} title="Re-detect cards on both scans">
+          Auto-detect
+        </button>
+        <button className={btn} onClick={addPair} title="Add a card the detection missed">
+          + Add
+        </button>
+        <button className={btn} onClick={deleteSelected} disabled={!selectedPair} title="Remove selected card pair (delete)">
+          Delete
+        </button>
         <button
           className={btn}
           onClick={() => {
             frontCanvasRef.current?.fitView();
             backCanvasRef.current?.fitView();
           }}
-          title="Fit (f)"
+          title="Fit both views (f)"
         >
           Fit
-        </button>
-        <button className={btn} onClick={runAutoDetect}>
-          Auto-detect both
-        </button>
-        <button className={btn} onClick={addPair}>
-          + Add card
-        </button>
-        <button className={btn} onClick={deleteSelected} disabled={!selectedPair}>
-          Delete
         </button>
 
         <div className="mx-2 h-5 w-px bg-zinc-800" />
 
+        <span className="text-[10px] uppercase tracking-wider text-zinc-600">Back boxes</span>
         <button className={btn} onClick={copyFromFront} title="Reset back boxes to front positions">
-          Back ⇐ front
+          ⇐ Copy front
         </button>
-        <button className={btn} onClick={() => applyMirror("h")} title="Mirror back boxes horizontally">
+        <button className={btn} onClick={() => applyMirror("h")} title="Mirror back boxes horizontally (batch flipped as a group)">
           Mirror ↔
         </button>
-        <button className={btn} onClick={() => applyMirror("v")} title="Mirror back boxes vertically">
+        <button className={btn} onClick={() => applyMirror("v")} title="Mirror back boxes vertically (batch flipped as a group)">
           Mirror ↕
         </button>
         <button
           className={`${btn} ${selectedPair?.rotate180 ? "border-amber-500 text-amber-300" : ""}`}
           onClick={() => selectedKey && toggle180(selectedKey)}
           disabled={!selectedPair}
-          title="Back reads upside-down (r)"
+          title="Selected card's back reads upside-down — rotate 180° at export (r)"
         >
           ⤾ 180°
         </button>
 
         <div className="mx-2 h-5 w-px bg-zinc-800" />
 
-        <span className="text-xs text-zinc-600">Scan upside-down?</span>
+        <span className="text-[10px] uppercase tracking-wider text-zinc-600">Scan upside-down?</span>
         <button
           className={btn}
           onClick={() => flipScans("front")}
@@ -442,12 +456,14 @@ export default function AlignWorkbench({ batchId }: { batchId: string }) {
           Flip both
         </button>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-2">
           {flipping && <span className="text-xs text-zinc-500">Rotating scans…</span>}
+          <ShortcutsHelp shortcuts={SHORTCUTS} />
           <button
             onClick={acceptAll}
             disabled={saving || pairs.length === 0}
             className="rounded-md bg-amber-600 px-4 py-1.5 text-sm font-medium text-black hover:bg-amber-500 disabled:opacity-50"
+            title="Save all crop boxes and move on to per-card review"
           >
             {saving ? "Saving…" : `Accept all → review ${pairs.length} cards`}
           </button>
@@ -461,9 +477,10 @@ export default function AlignWorkbench({ batchId }: { batchId: string }) {
         </div>
       )}
       <div className="shrink-0 border-b border-zinc-900 bg-black px-4 py-1 text-[11px] text-zinc-600">
-        click a pane to make it active · scroll = zoom · drag background = pan · tab = next card ·
-        arrows = nudge 1px (shift 10px) · [ ] = rotate 0.5° (shift 0.1°) · r = back reads upside-down ·
-        dashed line = card edge, solid line = export boundary with {margin}px margin
+        Align the <span className="text-zinc-400">dashed line</span> to the card edges — the{" "}
+        <span className="text-zinc-400">solid line</span> is what gets exported ({margin}px margin).
+        Selection is paired across both panes. Press <kbd className="text-zinc-400">?</kbd> for
+        keyboard shortcuts.
       </div>
 
       {/* dual canvases */}

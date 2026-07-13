@@ -3,18 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Card, Extraction } from "@/lib/types";
+import { CARD_STATUS } from "@/lib/status";
 
 interface Entry {
   card: Card & { batch_number: number };
   extraction: Extraction | null;
 }
-
-const statusPill: Record<string, string> = {
-  cropped: "bg-zinc-800 text-zinc-300",
-  extracted: "bg-cyan-950 text-cyan-300",
-  reviewed: "bg-emerald-950 text-emerald-300",
-  published: "bg-amber-950 text-amber-300",
-};
 
 /** A cropped card pair: front shown, click to flip to the back. */
 function FlipCard({ entry }: { entry: Entry }) {
@@ -39,7 +33,7 @@ function FlipCard({ entry }: { entry: Entry }) {
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={`/api/files/${card.front_image}`}
+            src={card.front_image ?? undefined}
             alt={`${title} — front`}
             loading="lazy"
             className="absolute inset-0 h-full w-full rounded-md object-contain"
@@ -48,7 +42,7 @@ function FlipCard({ entry }: { entry: Entry }) {
           {card.back_image && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={`/api/files/${card.back_image}`}
+              src={card.back_image}
               alt={`${title} — back`}
               loading="lazy"
               className="absolute inset-0 h-full w-full rounded-md object-contain"
@@ -65,8 +59,11 @@ function FlipCard({ entry }: { entry: Entry }) {
         >
           {title}
         </Link>
-        <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusPill[card.status]}`}>
-          {card.status}
+        <span
+          className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] ${CARD_STATUS[card.status].pill}`}
+          title={CARD_STATUS[card.status].help}
+        >
+          {CARD_STATUS[card.status].label}
         </span>
       </figcaption>
     </figure>
@@ -160,14 +157,17 @@ function SyncPanel({ exportedCount }: { exportedCount: number }) {
 
 export default function LibraryPage() {
   const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [source, setSource] = useState<"supabase" | "local" | null>(null);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
     // Fetch-on-mount: state updates happen after the awaited response.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     (async () => {
-      const res = await fetch("/api/review");
-      setEntries(await res.json());
+      const res = await fetch("/api/library");
+      const data = (await res.json()) as { source: "supabase" | "local"; entries: Entry[] };
+      setEntries(data.entries);
+      setSource(data.source);
     })();
   }, []);
 
@@ -199,7 +199,9 @@ export default function LibraryPage() {
           <p className="mt-1 text-sm text-zinc-500">
             {entries === null
               ? "Loading…"
-              : `${entries.length} cropped card pair(s) — click a card to flip it, click its title to open the profile`}
+              : `${entries.length} card pair(s)${
+                  source === "supabase" ? " · live from Supabase" : " · local data"
+                } — click a card to flip it, click its title to open the profile`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -218,7 +220,7 @@ export default function LibraryPage() {
         <p className="text-sm text-zinc-600">
           {entries && entries.length > 0
             ? "No cards match the search."
-            : "No exported cards yet — approve card pairs in a batch's review step first."}
+            : "No cards yet — use “+ Add batches” to upload and process your first scans."}
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">

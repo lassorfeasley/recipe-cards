@@ -1,6 +1,14 @@
+import sharp from "sharp";
 import { getDb } from "@/lib/db";
 import { readStoredFile, storedFileExists } from "@/lib/storage";
 import { getSupabaseAdmin } from "@/lib/supabase";
+
+/** Width of the public showcase thumbnails uploaded as {card_id}/{face}_thumb.jpg. */
+const THUMB_WIDTH = 480;
+
+async function makeThumb(buf: Buffer): Promise<Buffer> {
+  return sharp(buf).resize({ width: THUMB_WIDTH }).jpeg({ quality: 78 }).toBuffer();
+}
 
 interface CardRow {
   id: string;
@@ -172,6 +180,15 @@ export async function runSync(
         .upload(bucketKey(path), buf, { contentType: "image/jpeg", upsert: true });
       if (error) throw new Error(`${path}: ${error.message}`);
       imagesUploaded++;
+      // Small thumbnails (both faces) for the public showcase wall.
+      const face = path === c.front_image ? "front" : "back";
+      const { error: thumbErr } = await supabase.storage
+        .from("cards")
+        .upload(`${c.id}/${face}_thumb.jpg`, await makeThumb(buf), {
+          contentType: "image/jpeg",
+          upsert: true,
+        });
+      if (thumbErr) throw new Error(`${path} thumb: ${thumbErr.message}`);
     }
     markSynced.run(c.id);
   };
@@ -193,4 +210,46 @@ export async function runSync(
     imagesUploaded,
     errors,
   };
+}
+
+/**
+ * One-off backfill: (re)generate and upload the public showcase thumbnails
+ * (both faces) for every exported card. Used for cards synced before
+ * thumbnails existed.
+ */
+export async function backfillThumbs(): Promise<{ uploaded: number; errors: string[] }> {
+  const supabase = getSupabaseAdmin();
+  const cards = exportedCards();
+  const errors: string[] = [];
+  let uploaded = 0;
+
+  const one = async (c: CardRow) => {
+    const faces = [
+      ["front", c.front_image],
+      ["back", c.back_image],
+    ] as const;
+    for (const [face, path] of faces) {
+      if (!path) continue;
+      const buf = await readStoredFile(path);
+      const { error } = await supabase.storage
+        .from("cards")
+        .upload(`${c.id}/${face}_thumb.jpg`, await makeThumb(buf), {
+          contentType: "image/jpeg",
+          upsert: true,
+        });
+      if (error) throw new Error(`${c.id}/${face}: ${error.message}`);
+      uploaded++;
+    }
+  };
+
+  const CONCURRENCY = 6;
+  for (let i = 0; i < cards.length; i += CONCURRENCY) {
+    const results = await Promise.allSettled(cards.slice(i, i + CONCURRENCY).map(one));
+    for (const r of results) {
+      if (r.status === "rejected") {
+        errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
+      }
+    }
+  }
+  return { uploaded, errors };
 }

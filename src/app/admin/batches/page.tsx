@@ -5,6 +5,7 @@ import Link from "next/link";
 import exifr from "exifr";
 import type { BatchWithCounts, Settings } from "@/lib/types";
 import { marginPx } from "@/lib/types";
+import { BATCH_STATUS, batchNextStep } from "@/lib/status";
 
 interface ParsedBatch {
   batchNumber: number;
@@ -163,13 +164,6 @@ export default function BatchesPage() {
     setSettings(await res.json());
   }, []);
 
-  const statusPill: Record<string, string> = {
-    uploaded: "bg-zinc-800 text-zinc-300",
-    fronts_cropped: "bg-cyan-950 text-cyan-300",
-    backs_aligned: "bg-amber-950 text-amber-300",
-    complete: "bg-emerald-950 text-emerald-300",
-  };
-
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
@@ -294,57 +288,81 @@ export default function BatchesPage() {
 
       {/* batch list */}
       {batches.length === 0 ? (
-        <p className="text-sm text-zinc-600">No batches uploaded yet.</p>
+        <p className="text-sm text-zinc-600">
+          No batches yet — choose your scans folder above to get started. Each numbered folder
+          becomes one batch and moves through: align scans → review cards → extract & review
+          metadata → publish.
+        </p>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {batches.map((b) => (
-            <div key={b.id} className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`/api/files/scans/${b.batch_number}/front_thumb.jpg`}
-                alt={`Batch ${b.batch_number} front scan`}
-                className="h-44 w-full object-cover"
-              />
-              <div className="p-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-zinc-100">Batch {b.batch_number}</h3>
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${statusPill[b.status]}`}>
-                    {b.status.replace("_", " ")}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-zinc-500">
-                  {b.dpi ? `${b.dpi} dpi` : "dpi unknown"} · {b.card_count} cards ·{" "}
-                  {b.fronts_exported}/{b.card_count || "?"} fronts · {b.backs_exported}/
-                  {b.card_count || "?"} backs · {b.extracted_count} extracted
-                </p>
-                <div className="mt-3 flex gap-2 text-sm">
-                  <Link
-                    href={`/admin/batches/${b.id}/align`}
-                    className="rounded-md bg-cyan-900/60 px-3 py-1.5 text-cyan-200 hover:bg-cyan-800/60"
-                  >
-                    1 · Align
-                  </Link>
-                  <Link
-                    href={`/admin/batches/${b.id}/cards`}
-                    className={`rounded-md px-3 py-1.5 ${
-                      b.card_count > 0
-                        ? "bg-amber-900/60 text-amber-200 hover:bg-amber-800/60"
-                        : "pointer-events-none bg-zinc-900 text-zinc-600"
-                    }`}
-                  >
-                    2 · Review cards
-                  </Link>
-                  <button
-                    onClick={() => deleteBatch(b)}
-                    className="ml-auto rounded-md px-3 py-1.5 text-zinc-600 hover:bg-red-950/60 hover:text-red-300"
-                    title={`Delete batch ${b.batch_number} and all its data`}
-                  >
-                    Delete
-                  </button>
+          {batches.map((b) => {
+            const next = batchNextStep(b);
+            const status = BATCH_STATUS[b.status] ?? BATCH_STATUS.uploaded;
+            const exported = Math.min(b.fronts_exported, b.backs_exported);
+            return (
+              <div key={b.id} className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+                <Link href={next.href} className="block" title={next.done ? "Open card review" : next.label}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/files/scans/${b.batch_number}/front_thumb.jpg`}
+                    alt={`Batch ${b.batch_number} front scan`}
+                    className="h-44 w-full object-cover transition-opacity hover:opacity-80"
+                  />
+                </Link>
+                <div className="p-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-zinc-100">Batch {b.batch_number}</h3>
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${status.pill}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {b.card_count > 0
+                      ? `${b.card_count} cards · ${exported} approved · ${b.extracted_count} with metadata`
+                      : "cards not detected yet"}
+                    {b.dpi ? ` · ${b.dpi} dpi` : ""}
+                  </p>
+                  <div className="mt-3 flex items-center gap-2 text-sm">
+                    {next.done ? (
+                      <span className="rounded-md bg-emerald-950 px-3 py-1.5 text-emerald-300">
+                        ✓ {next.label}
+                      </span>
+                    ) : (
+                      <Link
+                        href={next.href}
+                        className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-black hover:bg-amber-500"
+                      >
+                        {next.label} →
+                      </Link>
+                    )}
+                    <Link
+                      href={`/admin/batches/${b.id}/align`}
+                      className="rounded-md px-2 py-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+                      title="Re-open scan alignment"
+                    >
+                      Align
+                    </Link>
+                    {b.card_count > 0 && (
+                      <Link
+                        href={`/admin/batches/${b.id}/cards`}
+                        className="rounded-md px-2 py-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+                        title="Re-open per-card review"
+                      >
+                        Cards
+                      </Link>
+                    )}
+                    <button
+                      onClick={() => deleteBatch(b)}
+                      className="ml-auto rounded-md px-2 py-1.5 text-zinc-700 hover:bg-red-950/60 hover:text-red-300"
+                      title={`Delete batch ${b.batch_number} and all its data`}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
