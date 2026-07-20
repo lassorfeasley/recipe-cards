@@ -1,62 +1,102 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
+import { adminEmailsConfigured, isAdminEmail } from "@/lib/adminAuth";
 
 /**
- * HTTP Basic Auth gate for the admin tool and its API routes.
+ * Supabase Auth gate for the admin tool and its API routes.
  *
- * The public site (/, /list, /3d, /card/*, /print/*) reads from Supabase and
- * needs no protection. The admin workflow, however, is no-auth by design and
- * only fully functions locally (it uses SQLite + local files). On a hosted
- * deployment we still want the admin UI/API reachable but private.
- *
- * Enforcement is opt-in: auth is only required when ADMIN_PASSWORD is set.
- * That keeps local `next dev` password-free while protecting production, where
- * ADMIN_USER (default "admin") and ADMIN_PASSWORD are configured as env vars.
+ * When ADMIN_EMAILS is unset (local dev), admin stays open.
+ * When set, /admin/* and /api/* require a Supabase session whose email is
+ * on the allowlist. /admin/login and /auth/callback are always public.
  */
 
+function loginRedirect(request: NextRequest): NextResponse {
+  const url = request.nextUrl.clone();
+  url.pathname = "/admin/login";
+  url.searchParams.set("next", request.nextUrl.pathname);
+  return NextResponse.redirect(url);
+}
+
 function unauthorized(): NextResponse {
-  return new NextResponse("Authentication required.", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="Recipe Cards Admin", charset="UTF-8"' },
+  return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+}
+
+export async function proxy(request: NextRequest) {
+  let response = NextResponse.next({ request });
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const path = request.nextUrl.pathname;
+
+  const isLogin = path === "/admin/login" || path.startsWith("/admin/login/");
+  const isCallback = path === "/auth/callback" || path.startsWith("/auth/callback/");
+  const isAdmin = path.startsWith("/admin");
+  const isApi = path.startsWith("/api");
+
+  // Public escape hatches — never gate these.
+  if (isLogin || isCallback) {
+    // Still refresh the session cookie if Supabase is configured.
+    if (url && key) {
+      const supabase = createServerClient(url, key, {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet, headers) {
+            cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+            response = NextResponse.next({ request });
+            cookiesToSet.forEach(({ name, value, options }) =>
+              response.cookies.set(name, value, options)
+            );
+            Object.entries(headers).forEach(([h, v]) => response.headers.set(h, v));
+          },
+        },
+      });
+      await supabase.auth.getUser();
+    }
+    return response;
+  }
+
+  if (!isAdmin && !isApi) return response;
+
+  // No allowlist configured → leave admin open (local convenience).
+  if (!adminEmailsConfigured()) return response;
+
+  if (!url || !key) {
+    return isApi ? unauthorized() : loginRedirect(request);
+  }
+
+  const supabase = createServerClient(url, key, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet, headers) {
+        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+        response = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) =>
+          response.cookies.set(name, value, options)
+        );
+        Object.entries(headers).forEach(([h, v]) => response.headers.set(h, v));
+      },
+    },
   });
-}
 
-/** Constant-time string comparison to avoid credential timing leaks. */
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-export function proxy(request: NextRequest): NextResponse {
-  const password = process.env.ADMIN_PASSWORD;
-  // No password configured (e.g. local dev): leave the admin open.
-  if (!password) return NextResponse.next();
-
-  const expectedUser = process.env.ADMIN_USER || "admin";
-
-  const header = request.headers.get("authorization");
-  if (!header?.startsWith("Basic ")) return unauthorized();
-
-  let decoded: string;
-  try {
-    decoded = atob(header.slice("Basic ".length));
-  } catch {
-    return unauthorized();
+  if (!user || !isAdminEmail(user.email)) {
+    // Signed in but not allowlisted: sign out so they can try another account.
+    if (user && !isAdminEmail(user.email)) {
+      await supabase.auth.signOut();
+    }
+    return isApi ? unauthorized() : loginRedirect(request);
   }
 
-  const sep = decoded.indexOf(":");
-  const user = sep === -1 ? decoded : decoded.slice(0, sep);
-  const pass = sep === -1 ? "" : decoded.slice(sep + 1);
-
-  // Evaluate both comparisons so a wrong username can't short-circuit early.
-  const ok = safeEqual(user, expectedUser) && safeEqual(pass, password);
-  return ok ? NextResponse.next() : unauthorized();
+  return response;
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/api/:path*"],
+  matcher: ["/admin/:path*", "/api/:path*", "/auth/callback"],
 };

@@ -2,9 +2,7 @@
 
 Admin tool + public site for digitizing ~300 handwritten recipe cards scanned in batches of ~9 cards (numbered folders, each with `Front.jpeg` + `Back.jpeg`).
 
-This is the **local, no-auth v1**: upload, crop, back-align, AI extraction, and review all run on your machine. Data lives in `data/` (SQLite + image files), which stands in for Supabase Postgres/Storage until hosting is added. The schema mirrors the planned Supabase schema so migration is mechanical.
-
-The production Supabase schema lives in `supabase/schema.sql` (tables, RLS, and the public `cards` storage bucket). Original scans stay local — only cropped card pairs and their metadata go to Supabase, via the Library tab's sync button (requires `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`).
+This is the **local-first admin + hosted public site**: upload, crop, back-align, AI extraction, and review run on your machine against `data/` (SQLite + image files). The production Supabase schema lives in `supabase/schema.sql`. Cropped card pairs and metadata sync to Supabase via the Library tab (requires `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`). The hosted `/admin` Library can edit/publish against Supabase after Supabase Auth login (`ADMIN_EMAILS`).
 
 ## Setup
 
@@ -70,37 +68,41 @@ Press `?` on either screen for the in-app cheat-sheet.
 | Var | Purpose |
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL — required by the public site (build + runtime) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key — required by the public site (RLS gates what's visible) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key — required for the admin **Sync to Supabase** action |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key — public site + admin login (RLS gates what's visible) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key — local **Sync to Supabase** and hosted admin writes |
 | `ANTHROPIC_API_KEY` | required for `/api/extract` (admin AI extraction) |
 | `ANTHROPIC_MODEL` | optional, defaults to `claude-sonnet-4-6` |
-| `ADMIN_USER` | optional, defaults to `admin` — Basic Auth username for the admin gate |
-| `ADMIN_PASSWORD` | when set, `/admin/*` and `/api/*` require HTTP Basic Auth (see [Deploying](#deploying-to-vercel)) |
+| `ADMIN_EMAILS` | when set, `/admin/*` and `/api/*` require Supabase Auth; only these emails may sign in (comma-separated) |
 | `DATA_DIR` | optional, defaults to `./data` — local SQLite + image storage (local only) |
 
 ## Deploying to Vercel
 
 The **public site** is fully serverless-ready: it reads everything from Supabase
-(anon key), so it needs no local database or filesystem. The **admin tool** only
-_fully_ functions locally — it uses SQLite (`better-sqlite3`) and writes cropped
-images to `DATA_DIR`, neither of which persists on Vercel's read-only, ephemeral
-filesystem. Keep running the scan → crop → extract → review → **Sync to Supabase**
-workflow on your machine; syncing publishes the results that the hosted public
-site serves.
+(anon key), so it needs no local database or filesystem.
 
-`src/proxy.ts` (Next.js's renamed middleware) puts `/admin/*` and `/api/*` behind
-HTTP Basic Auth **whenever `ADMIN_PASSWORD` is set**. Locally that variable is
-unset, so the admin stays password-free; on Vercel you set it, so the admin UI is
-reachable but private (the public pages are never gated).
+The **hosted admin** supports the **Library** and per-card edit/publish flow against
+Supabase (after you sign in). Batch scan → crop → extract still needs your local
+machine (SQLite + `DATA_DIR`); sync from local publishes images and metadata that
+the hosted site and hosted library both use.
+
+`src/proxy.ts` (Next.js's renamed middleware) gates `/admin/*` and `/api/*` with
+**Supabase Auth** whenever `ADMIN_EMAILS` is set. Sign in at `/admin/login` with
+an email/password user you create in the Supabase Dashboard. Only emails on the
+allowlist are admitted. Locally leave `ADMIN_EMAILS` unset to keep admin open.
 
 Steps:
 
 1. Push this repo to GitHub and import it into Vercel (framework auto-detected as Next.js).
-2. In **Project → Settings → Environment Variables**, add:
+2. In Supabase → **Authentication**, create your admin user (email/password) and
+   disable public sign-ups if you have not already.
+3. In **Project → Settings → Environment Variables**, add:
    - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` — **required at build time**; the home and index pages prerender from Supabase, so the build fails without them.
-   - `ADMIN_USER` (optional) and `ADMIN_PASSWORD` — to lock down the admin/API on the deployment.
-   - `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY` — only if you intend to trigger sync/extraction from the hosted admin (otherwise omit; those actions are best run locally).
-3. Deploy. Public pages revalidate every 2 minutes, so cards you sync from your
+   - `ADMIN_EMAILS` — your allowlisted email(s), e.g. `you@example.com`.
+   - `SUPABASE_SERVICE_ROLE_KEY` — required for hosted library/card edits (writes after the session check).
+   - `ANTHROPIC_API_KEY` — only if you intend to run AI extraction from the host (usually omit; run locally).
+4. In Supabase → Authentication → URL configuration, add your Vercel origin to
+   the site URL / redirect allow list (e.g. `https://your-app.vercel.app/auth/callback`).
+5. Deploy. Public pages revalidate every 2 minutes, so cards you sync from your
    local admin appear on the hosted site within a couple of minutes — no redeploy.
 
 ## Test fixtures

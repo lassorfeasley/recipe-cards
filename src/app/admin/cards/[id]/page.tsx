@@ -7,8 +7,15 @@ import ExtractionFields from "@/components/ExtractionFields";
 import { CARD_STATUS } from "@/lib/status";
 
 interface CardDetail {
-  card: Card & { batch_number: number };
+  card: Card & { batch_number: number | null };
   extraction: Extraction | null;
+  source: "local" | "supabase";
+}
+
+function imageSrc(path: string | null | undefined): string | undefined {
+  if (!path) return undefined;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `/api/files/${path}`;
 }
 
 export default function CardProfilePage({ params }: { params: Promise<{ id: string }> }) {
@@ -42,45 +49,61 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
       .then(setCollections);
   }, [load]);
 
-  // Background push to Supabase after any change (mirrors the review queue).
-  const syncCard = useCallback(async () => {
-    try {
-      const res = await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ card_ids: [id] }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) setMessage(`Sync failed: ${data.error ?? res.status}`);
-      else if (data.errors?.length) setMessage(`Sync failed: ${data.errors[0]}`);
-      else setMessage("Saved · synced to Supabase ✓");
-    } catch (e) {
-      setMessage(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }, [id]);
+  // Background push to Supabase after local changes only.
+  const syncCard = useCallback(
+    async (source: "local" | "supabase") => {
+      if (source === "supabase") {
+        setMessage("Saved · updated on Supabase ✓");
+        return;
+      }
+      try {
+        const res = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ card_ids: [id] }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) setMessage(`Sync failed: ${data.error ?? res.status}`);
+        else if (data.errors?.length) setMessage(`Sync failed: ${data.errors[0]}`);
+        else setMessage("Saved · synced to Supabase ✓");
+      } catch (e) {
+        setMessage(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [id]
+  );
 
   const saveMetadata = useCallback(async () => {
     if (!detail) return;
     setBusy("save");
     setMessage(null);
     let extraction = detail.extraction;
+    let source = detail.source;
     // No extraction yet (never scanned): create a blank manual one to hold the edits.
     if (!extraction) {
       const res = await fetch(`/api/cards/${id}/extraction`, { method: "POST" });
-      extraction = (await res.json()) as Extraction;
+      const created = (await res.json()) as Extraction & { source?: "local" | "supabase" };
+      extraction = created;
+      if (created.source) source = created.source;
     }
-    await fetch(`/api/extractions/${extraction.id}`, {
+    const patchRes = await fetch(`/api/extractions/${extraction.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...draft, reviewed: true }),
     });
+    const patched = (await patchRes.json()) as Extraction & { source?: "local" | "supabase" };
+    if (patched.source) source = patched.source;
     await load();
-    await syncCard();
+    await syncCard(source);
     setBusy(null);
   }, [detail, draft, id, load, syncCard]);
 
   const rescan = useCallback(async () => {
     if (!detail) return;
+    if (detail.source === "supabase") {
+      setMessage("Re-scan needs local card images — run this from your machine.");
+      return;
+    }
     if (
       detail.extraction?.reviewed &&
       !confirm(
@@ -101,7 +124,7 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
       setMessage(`Re-scan failed: ${err.message ?? err.error ?? res.status}`);
     } else {
       await load();
-      await syncCard();
+      await syncCard("local");
     }
     setBusy(null);
   }, [detail, id, load, syncCard]);
@@ -110,45 +133,57 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
     async (collectionId: string) => {
       setBusy("save");
       setMessage(null);
-      await fetch(`/api/cards/${id}`, {
+      const res = await fetch(`/api/cards/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ collection_id: collectionId || null }),
       });
+      const data = (await res.json()) as Card & { source?: "local" | "supabase" };
       await load();
-      await syncCard();
+      await syncCard(data.source ?? detail?.source ?? "local");
       setBusy(null);
     },
-    [id, load, syncCard]
+    [detail?.source, id, load, syncCard]
   );
 
   const setStatus = useCallback(
     async (status: Card["status"]) => {
       setBusy("status");
       setMessage(null);
-      await fetch(`/api/cards/${id}`, {
+      const res = await fetch(`/api/cards/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
+      const data = (await res.json()) as Card & { source?: "local" | "supabase" };
       await load();
-      await syncCard();
+      await syncCard(data.source ?? detail?.source ?? "local");
       setBusy(null);
     },
-    [id, load, syncCard]
+    [detail?.source, id, load, syncCard]
   );
 
   if (notFound) {
     return (
       <div className="p-8 text-zinc-400">
-        Card not found. <Link href="/admin/library" className="text-cyan-400">Back to library</Link>
+        Card not found.{" "}
+        <Link href="/admin/library" className="text-cyan-400">
+          Back to library
+        </Link>
       </div>
     );
   }
   if (!detail) return <div className="p-8 text-zinc-600">Loading…</div>;
 
   const { card, extraction } = detail;
-  const title = extraction?.title ?? `Batch ${card.batch_number} · card ${card.position}`;
+  const title =
+    extraction?.title ??
+    (card.batch_number != null
+      ? `Batch ${card.batch_number} · card ${card.position}`
+      : `Card ${card.position}`);
+  const frontSrc = imageSrc(card.front_image);
+  const backSrc = imageSrc(card.back_image);
+  const remoteOnly = detail.source === "supabase";
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
@@ -184,15 +219,15 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`/api/files/${card.front_image}`}
+                src={frontSrc}
                 alt={`${title} — front`}
                 className="absolute inset-0 h-full w-full rounded-md object-contain"
                 style={{ backfaceVisibility: "hidden" }}
               />
-              {card.back_image && (
+              {backSrc && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={`/api/files/${card.back_image}`}
+                  src={backSrc}
                   alt={`${title} — back`}
                   className="absolute inset-0 h-full w-full rounded-md object-contain"
                   style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
@@ -207,7 +242,9 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
           <dl className="mt-6 grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-zinc-800 bg-zinc-950 p-4 text-sm">
             <dt className="text-zinc-500">Batch</dt>
             <dd className="text-zinc-200">
-              {card.batch_number} · position {card.position}
+              {card.batch_number != null
+                ? `${card.batch_number} · position ${card.position}`
+                : `position ${card.position}`}
             </dd>
             <dt className="text-zinc-500">Slug</dt>
             <dd className="truncate text-zinc-200">{card.slug ?? "—"}</dd>
@@ -234,19 +271,27 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
                 ? `${extraction.model}${extraction.reviewed ? " · reviewed ✓" : " · unreviewed"}`
                 : "none yet"}
             </dd>
-            <dt className="text-zinc-500">Supabase</dt>
-            <dd className="text-zinc-200">{card.synced_at ? "images synced" : "images pending sync"}</dd>
+            <dt className="text-zinc-500">Source</dt>
+            <dd className="text-zinc-200">
+              {remoteOnly
+                ? "Supabase (hosted)"
+                : card.synced_at
+                  ? "local · images synced"
+                  : "local · images pending sync"}
+            </dd>
           </dl>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              onClick={rescan}
-              disabled={busy !== null}
-              className="rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-900 disabled:opacity-50"
-              title="Run Claude over the front + back images again"
-            >
-              {busy === "rescan" ? "Re-scanning…" : "Re-scan metadata (AI)"}
-            </button>
+            {!remoteOnly && (
+              <button
+                onClick={rescan}
+                disabled={busy !== null}
+                className="rounded-md border border-zinc-700 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-900 disabled:opacity-50"
+                title="Run Claude over the front + back images again"
+              >
+                {busy === "rescan" ? "Re-scanning…" : "Re-scan metadata (AI)"}
+              </button>
+            )}
             {card.status === "published" ? (
               <button
                 onClick={() => setStatus("reviewed")}
@@ -293,7 +338,9 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
             </button>
           </div>
           <p className="mt-2 text-xs text-zinc-600">
-            Saving marks the metadata as human-reviewed and syncs the card to Supabase.
+            {remoteOnly
+              ? "Saving marks the metadata as human-reviewed and writes directly to Supabase."
+              : "Saving marks the metadata as human-reviewed and syncs the card to Supabase."}
           </p>
         </div>
       </div>
