@@ -108,8 +108,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pan-y,
-  .pan-x,
+  /* Keep the ambient pan — it's the whole point of the wall — but drop the
+     per-card flip wave, which is the heavier motion. */
   .card-wave,
   .card-wave .face-front,
   .card-wave .face-back {

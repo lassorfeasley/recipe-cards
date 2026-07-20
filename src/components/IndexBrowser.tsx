@@ -21,15 +21,16 @@ const MIN_H = 60;
 const CARD_RATIO = 3 / 5;
 /** Distance (px) from the focus line over which a card decays back to a strip. */
 const FALLOFF = 330;
-/** Viewport y of the focus line — the top of the list, so card 1 opens at rest. */
-const FOCUS_TOP = 126;
+/** Desktop viewport y of the focus line — the top of the list, so card 1 opens at rest. */
+const FOCUS_TOP_DESKTOP = 126;
 /**
- * Viewport y where cards pin — the top card's resting position on load
+ * Desktop viewport y where cards pin — the top card's resting position on load
  * (the container's pt-24). Cards are sticky, so instead of scrolling off the
  * top they stop at the stack and the cards after them slide up and pile on
- * top (later DOM order paints above).
+ * top (later DOM order paints above). On mobile both lines are derived from
+ * the measured fixed-header height instead.
  */
-const STACK_TOP = FOCUS_TOP - MIN_H / 2;
+const STACK_TOP_DESKTOP = FOCUS_TOP_DESKTOP - MIN_H / 2;
 /** Vertical offset between successive cards in the pile, in px. */
 const STAGGER = 3;
 /**
@@ -50,6 +51,31 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const [query, setQuery] = useState("");
   const [categories, setCategories] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  // Height of the fixed mobile header; 0 on desktop where it's display:none.
+  const [headerH, setHeaderH] = useState(0);
+
+  // The mobile header is position:fixed (sticky is unreliable in iOS Safari
+  // when the URL bar collapses), so the card-pile geometry must be derived
+  // from its real rendered height.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const measure = () => setHeaderH(el.offsetHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
+  const stackTop = headerH > 0 ? headerH + 8 : STACK_TOP_DESKTOP;
+  const focusTop = stackTop + MIN_H / 2;
+
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -104,33 +130,33 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       while (
         pinnedCount < cards.length &&
         tops[pinnedCount] <=
-          (parseFloat(cards[pinnedCount].style.top) || STACK_TOP) + 0.5
+          (parseFloat(cards[pinnedCount].style.top) || stackTop) + 0.5
       ) {
         pinnedCount++;
       }
 
       // Write phase. Pile slots, newest (deepest in the pile) card lowest:
       // the most recent STACK_VISIBLE pinned cards fan out by STAGGER;
-      // anything older overlaps exactly at STACK_TOP. Pinned cards hold full
+      // anything older overlaps exactly at stackTop. Pinned cards hold full
       // height (constant, so the document doesn't churn); unpinned cards get
       // the pile's next open slot so they ride in seamlessly, sized by their
       // distance to the focus line.
       const deepest = Math.min(pinnedCount - 1, STACK_VISIBLE - 1);
       const nextSlot =
-        STACK_TOP + STAGGER * Math.min(pinnedCount, STACK_VISIBLE - 1);
+        stackTop + STAGGER * Math.min(pinnedCount, STACK_VISIBLE - 1);
       let changed = false;
       for (let i = 0; i < cards.length; i++) {
         let top: number;
         let h: number;
         if (i < pinnedCount) {
           const fromNewest = pinnedCount - 1 - i;
-          top = STACK_TOP + STAGGER * Math.max(0, deepest - fromNewest);
+          top = stackTop + STAGGER * Math.max(0, deepest - fromNewest);
           h = maxH;
         } else {
           top = nextSlot;
           const d = Math.max(
             0,
-            Math.abs(tops[i] + MIN_H / 2 - FOCUS_TOP) - pileDepth
+            Math.abs(tops[i] + MIN_H / 2 - focusTop) - pileDepth
           );
           const t = Math.max(0, 1 - d / FALLOFF);
           const ease = t * t * (3 - 2 * t); // smoothstep
@@ -168,7 +194,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       window.removeEventListener("resize", schedule);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [matches]);
+  }, [matches, stackTop, focusTop]);
 
   const toggleCategory = (c: string) =>
     setCategories((prev) => {
@@ -178,12 +204,107 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       return next;
     });
 
+  const clearFilters = () => {
+    setQuery("");
+    setCategories(new Set());
+  };
+
   const filtered = query.trim() !== "" || categories.size > 0;
 
+  const categoryChips = (
+    <div className="flex flex-wrap gap-1.5 md:flex-col md:gap-1">
+      {categoryCounts.map(([c, n]) => {
+        const active = categories.has(c);
+        return (
+          <button
+            key={c}
+            onClick={() => toggleCategory(c)}
+            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm transition-colors ${
+              active
+                ? "bg-zinc-100 text-zinc-900"
+                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+            }`}
+          >
+            <span className="capitalize">{c}</span>
+            <span className={active ? "text-zinc-500" : "text-zinc-600"}>{n}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-10 px-4 pt-24 md:flex-row">
-      {/* sidebar — sits directly on the dark background */}
-      <aside className="shrink-0 md:sticky md:top-24 md:h-fit md:w-56">
+    <div className="mx-auto flex max-w-5xl flex-col md:flex-row md:gap-10 px-4 md:pt-24">
+      {/* Mobile: fixed search/filter bar. position:fixed (not sticky) so iOS
+          Safari can't detach it while the URL bar collapses mid-scroll. The
+          card pile pins just below its measured height. The category panel
+          drops over the list from the bar's bottom edge. */}
+      <div
+        ref={headerRef}
+        className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur md:hidden"
+      >
+        <div className="flex items-baseline justify-between">
+          <h1 className="text-[10px] font-medium uppercase tracking-[0.35em] text-zinc-500">
+            Recipe Index
+          </h1>
+          <p className="text-xs text-zinc-500">
+            {matches.length} of {entries.length}
+            {filtered && (
+              <>
+                {" · "}
+                <button
+                  onClick={clearFilters}
+                  className="text-zinc-300 underline underline-offset-2 hover:text-white"
+                >
+                  clear
+                </button>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="mt-2 flex gap-2">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search recipes…"
+            className="h-10 min-w-0 flex-1 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400"
+          />
+          <button
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            className={`flex h-10 shrink-0 items-center gap-1.5 border px-3 text-sm transition-colors ${
+              filtersOpen || categories.size > 0
+                ? "border-zinc-100 bg-zinc-100 text-zinc-900"
+                : "border-zinc-700 bg-zinc-900 text-zinc-300"
+            }`}
+          >
+            Filter
+            {categories.size > 0 && (
+              <span className="text-xs">· {categories.size}</span>
+            )}
+          </button>
+        </div>
+        {filtersOpen && (
+          <div className="absolute inset-x-0 top-full max-h-[60vh] overflow-y-auto border-b border-zinc-800 bg-zinc-950/95 px-4 pb-4 pt-3 backdrop-blur">
+            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
+              Category
+            </p>
+            {categoryChips}
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={() => setFiltersOpen(false)}
+                className="border border-zinc-700 px-4 py-1.5 text-sm text-zinc-300 hover:bg-zinc-900"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Desktop: sidebar on the dark background */}
+      <aside className="hidden shrink-0 md:sticky md:top-24 md:block md:h-fit md:w-56">
         <h1 className="text-xs font-medium uppercase tracking-[0.35em] text-zinc-500">
           Recipe Index
         </h1>
@@ -203,25 +324,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
           <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
             Category
           </p>
-          <div className="flex flex-wrap gap-1.5 md:flex-col md:gap-1">
-            {categoryCounts.map(([c, n]) => {
-              const active = categories.has(c);
-              return (
-                <button
-                  key={c}
-                  onClick={() => toggleCategory(c)}
-                  className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm transition-colors ${
-                    active
-                      ? "bg-zinc-100 text-zinc-900"
-                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-                  }`}
-                >
-                  <span className="capitalize">{c}</span>
-                  <span className={active ? "text-zinc-500" : "text-zinc-600"}>{n}</span>
-                </button>
-              );
-            })}
-          </div>
+          {categoryChips}
         </div>
 
         <p className="mt-7 text-xs text-zinc-500">
@@ -230,10 +333,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             <>
               {" · "}
               <button
-                onClick={() => {
-                  setQuery("");
-                  setCategories(new Set());
-                }}
+                onClick={clearFilters}
                 className="text-zinc-300 underline underline-offset-2 hover:text-white"
               >
                 clear
@@ -248,7 +348,11 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
           the pile, including the last card fully expanded, stays pinned at
           the stack line to the very end of the scroll instead of being
           pushed up off the viewport. */}
-      <div ref={listRef} className="flex min-w-0 flex-1 flex-col">
+      <div
+        ref={listRef}
+        className="flex min-w-0 flex-1 flex-col md:pt-0"
+        style={{ paddingTop: headerH > 0 ? headerH + 12 : undefined }}
+      >
         {matches.length === 0 ? (
           <p className="pt-8 text-sm text-zinc-500">No recipes match.</p>
         ) : (
@@ -257,7 +361,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
               key={r.id}
               href={`/card/${r.slug}`}
               className="sticky block shrink-0 overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)] outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-white"
-              style={{ height: MIN_H, top: STACK_TOP }}
+              style={{ height: MIN_H, top: stackTop }}
             >
               <span
                 className="flex items-center justify-between gap-4"

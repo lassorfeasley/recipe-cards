@@ -240,13 +240,14 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
   const [durX, setDurX] = useState<number | null>(null);
   const [visCols, setVisCols] = useState<number | null>(null);
   const [lite, setLite] = useState(false);
-  // Once the user drags, the auto-pan stops for good and the wall becomes a
-  // freely pannable map (drag + momentum, wrapping on the 2×2 torus).
+  // Once the user drags past a threshold, the auto-pan stops and the wall
+  // becomes a freely pannable map (drag + momentum, wrapping on the 2×2 torus).
   const [manual, setManual] = useState(false);
+  const manualRef = useRef(false);
   const pos = useRef({ x: 0, y: 0 });
   const vel = useRef({ x: 0, y: 0 });
   const raf = useRef<number | null>(null);
-  const moved = useRef(0);
+  const dragMoved = useRef(0);
 
   const deck = useMemo(() => padDeck(recipes), [recipes]);
 
@@ -267,7 +268,7 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
 
   /** Freeze the CSS pan exactly where it is and take over with transforms. */
   const enterManual = useCallback(() => {
-    if (manual) return;
+    if (manualRef.current) return;
     const outerEl = container.current;
     const innerEl = inner.current;
     if (!outerEl || !innerEl) return;
@@ -277,27 +278,35 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
       const m = new DOMMatrixReadOnly(t);
       return { x: m.m41, y: m.m42 };
     };
+    // Capture the animated position BEFORE killing the animation — clearing
+    // animation snaps the element back to its un-transformed layout.
     pos.current = { x: read(innerEl).x, y: read(outerEl).y };
+    manualRef.current = true;
+    setManual(true);
+    // Keep animation:none in the style so the .pan-y / .pan-x classes can't
+    // restart the CSS loop after the React re-render.
     outerEl.style.animation = "none";
     innerEl.style.animation = "none";
-    setManual(true);
     applyTransform();
-  }, [manual, applyTransform]);
+  }, [applyTransform]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (!e.isPrimary) return;
+      // Only primary touch/mouse. Ignore secondary fingers / stylus hover.
+      if (!e.isPrimary || e.button !== 0) return;
       if (raf.current !== null) {
         cancelAnimationFrame(raf.current);
         raf.current = null;
       }
-      enterManual();
-      moved.current = 0;
+      dragMoved.current = 0;
       vel.current = { x: 0, y: 0 };
       const pointerId = e.pointerId;
       let lastX = e.clientX;
       let lastY = e.clientY;
       let lastT = performance.now();
+      let dragging = manualRef.current;
+      // Capture so moves keep firing even if the finger leaves the element.
+      (e.currentTarget as HTMLElement).setPointerCapture?.(pointerId);
 
       const move = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
@@ -308,16 +317,28 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
         lastX = ev.clientX;
         lastY = ev.clientY;
         lastT = now;
-        moved.current += Math.abs(dx) + Math.abs(dy);
+        dragMoved.current += Math.abs(dx) + Math.abs(dy);
+
+        // Stay in auto-pan until the finger actually moves — a tap must still
+        // open a card, and we don't want a light touch to freeze the wall.
+        if (!dragging) {
+          if (dragMoved.current < 10) return;
+          enterManual();
+          dragging = true;
+        }
+
         pos.current = { x: pos.current.x + dx, y: pos.current.y + dy };
         vel.current = { x: (dx / dt) * 1000, y: (dy / dt) * 1000 };
         applyTransform();
+        // Stop the browser from scrolling / selecting while we pan.
+        ev.preventDefault();
       };
       const up = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", up);
+        if (!dragging) return;
         // Map-style momentum: glide and decay after release.
         if (Math.hypot(vel.current.x, vel.current.y) < 60) return;
         let prev = performance.now();
@@ -337,7 +358,7 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
         };
         raf.current = requestAnimationFrame(step);
       };
-      window.addEventListener("pointermove", move);
+      window.addEventListener("pointermove", move, { passive: false });
       window.addEventListener("pointerup", up);
       window.addEventListener("pointercancel", up);
     },
@@ -346,7 +367,7 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
 
   // A real drag must not "click through" to the card link under the finger.
   const onClickCapture = useCallback((e: React.MouseEvent) => {
-    if (moved.current > 8) {
+    if (dragMoved.current > 10) {
       e.preventDefault();
       e.stopPropagation();
     }
@@ -390,16 +411,34 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
       // columns takes TILE_COLS times that.
       const rows = deck.length / TILE_COLS;
       const cellH = grid.offsetHeight / rows;
+      if (!(cellH > 0) || !(grid.offsetHeight > 0)) return;
       setDurY(grid.offsetHeight / PAN_SPEED);
       setDurX((TILE_COLS * cellH) / PAN_SPEED);
     };
     measure();
+    // Measure again after layout settles — images/fonts can change cell height.
+    const t = window.setTimeout(measure, 100);
     const ro = new ResizeObserver(measure);
     ro.observe(root);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(t);
+    };
   }, [deck]);
 
   const ready = durX != null && durY != null;
+  // In manual mode we must keep animation:none in the style object so the
+  // pan-y / pan-x classes don't revive the CSS loop after a re-render.
+  const outerStyle: React.CSSProperties | undefined = manual
+    ? { animation: "none" }
+    : ready && !PAN_PAUSED
+      ? { animationDuration: `${durY}s` }
+      : { animationPlayState: "paused" };
+  const innerStyle: React.CSSProperties | undefined = manual
+    ? { animation: "none" }
+    : ready && !PAN_PAUSED
+      ? { animationDuration: `${durX}s` }
+      : { animationPlayState: "paused" };
 
   return (
     <main
@@ -410,29 +449,17 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
     >
       {/* Two independent seamless loops composed: outer drifts up, inner drifts
           right — together the cards pan toward the top right. After the first
-          drag both animations are frozen and the same two elements are driven
-          by pointer transforms instead (map-style panning with momentum). */}
+          real drag both animations are frozen and the same two elements are
+          driven by pointer transforms instead (map-style panning with momentum). */}
       <div
         ref={container}
         className="pan-y w-max will-change-transform"
-        style={
-          manual
-            ? undefined
-            : ready && !PAN_PAUSED
-              ? { animationDuration: `${durY}s` }
-              : { animationPlayState: "paused" }
-        }
+        style={outerStyle}
       >
         <div
           ref={inner}
           className="pan-x flex w-max flex-col will-change-transform"
-          style={
-            manual
-              ? undefined
-              : ready && !PAN_PAUSED
-                ? { animationDuration: `${durX}s` }
-                : { animationPlayState: "paused" }
-          }
+          style={innerStyle}
         >
           <div className="flex">
             <CardGrid recipes={deck} visCols={visCols} eager lite={lite} />
