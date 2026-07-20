@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { RecipeStructured } from "./types";
 
 /**
  * Data access for the public site. Uses the ANON key, so Supabase RLS is the
@@ -27,8 +28,11 @@ export interface PublicRecipe {
   title: string;
   category: string | null;
   attribution: string | null;
+  /** Name of the physical recipe box the card came from, e.g. "Adeline Feasley". */
+  collection: string | null;
   ingredients: string[] | null;
   recipe_markdown: string | null;
+  recipe_structured: RecipeStructured | null;
   transcription_front: string | null;
   transcription_back: string | null;
   back_relationship: string | null;
@@ -45,12 +49,18 @@ export async function getPublishedRecipes(): Promise<PublicRecipe[]> {
   const publicUrl = (key: string) =>
     supabase.storage.from("cards").getPublicUrl(key).data.publicUrl;
 
-  const [cardsRes, extractionsRes] = await Promise.all([
+  const [cardsRes, extractionsRes, collectionsRes] = await Promise.all([
     supabase.from("cards").select("*").not("slug", "is", null).not("front_image", "is", null),
     supabase.from("extractions").select("*").order("created_at", { ascending: false }),
+    supabase.from("collections").select("id, name"),
   ]);
   if (cardsRes.error) throw new Error(cardsRes.error.message);
   if (extractionsRes.error) throw new Error(extractionsRes.error.message);
+  if (collectionsRes.error) throw new Error(collectionsRes.error.message);
+
+  const collectionName = new Map(
+    (collectionsRes.data as Array<{ id: string; name: string }>).map((c) => [c.id, c.name])
+  );
 
   // Newest-first, so the first extraction per card wins (RLS already filtered to reviewed).
   const latest = new Map<string, Record<string, unknown>>();
@@ -69,8 +79,12 @@ export async function getPublishedRecipes(): Promise<PublicRecipe[]> {
       title: (e.title as string | null) ?? (c.slug as string),
       category: e.category as string | null,
       attribution: e.attribution as string | null,
+      collection: c.collection_id
+        ? (collectionName.get(c.collection_id as string) ?? null)
+        : null,
       ingredients: e.ingredients as string[] | null,
       recipe_markdown: e.recipe_markdown as string | null,
+      recipe_structured: (e.recipe_structured as RecipeStructured | undefined) ?? null,
       transcription_front: e.transcription_front as string | null,
       transcription_back: e.transcription_back as string | null,
       back_relationship: e.back_relationship as string | null,

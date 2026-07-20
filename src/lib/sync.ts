@@ -23,6 +23,7 @@ interface CardRow {
   front_image: string | null;
   back_image: string | null;
   status: string;
+  collection_id: string | null;
   created_at: string;
   synced_at: string | null;
 }
@@ -85,6 +86,19 @@ export async function runSync(
   }
   const errors: string[] = [];
 
+  // ---- 0. collections (tiny table — always push all of them) ----
+  {
+    const collections = db
+      .prepare("select id, name, created_at from collections")
+      .all() as Array<{ id: string; name: string; created_at: string }>;
+    if (collections.length > 0) {
+      const { error } = await supabase.from("collections").upsert(
+        collections.map((c) => ({ id: c.id, name: c.name, created_at: toIso(c.created_at) }))
+      );
+      if (error) throw new Error(`collections upsert failed: ${error.message}`);
+    }
+  }
+
   // ---- 1. batches (only those with exported cards) ----
   const batchIds = [...new Set(cards.map((c) => c.batch_id))];
   const batchRows = batchIds
@@ -126,6 +140,7 @@ export async function runSync(
         front_image: bucketKey(c.front_image!),
         back_image: bucketKey(c.back_image!),
         status: c.status,
+        collection_id: c.collection_id,
         created_at: toIso(c.created_at),
       }))
     );
@@ -155,6 +170,7 @@ export async function runSync(
         transcription_back: e.transcription_back,
         ingredients: e.ingredients ? JSON.parse(e.ingredients as string) : null,
         recipe_markdown: e.recipe_markdown,
+        recipe_structured: e.recipe_structured ? JSON.parse(e.recipe_structured as string) : null,
         ai_notes: e.ai_notes,
         confidence: e.confidence,
         model: e.model,

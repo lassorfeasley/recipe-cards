@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import { getRecipeBySlug } from "@/lib/publicData";
 import AutoPrint from "@/components/AutoPrint";
+import StructuredRecipe from "@/components/StructuredRecipe";
+import { hasStructuredContent } from "@/lib/recipe";
 
 export const revalidate = 120;
 
@@ -71,9 +73,13 @@ export default async function PrintPage({ params }: { params: Promise<{ slug: st
         </section>
 
         {/* the recipe, cleaned up */}
-        {recipe.recipe_markdown && (
+        {(hasStructuredContent(recipe.recipe_structured) || recipe.recipe_markdown) && (
           <section className="recipe-print mt-8 text-[13px] leading-relaxed">
-            <ReactMarkdown>{recipe.recipe_markdown}</ReactMarkdown>
+            {hasStructuredContent(recipe.recipe_structured) ? (
+              <StructuredRecipe recipe={recipe.recipe_structured} />
+            ) : (
+              <ReactMarkdown>{recipe.recipe_markdown!}</ReactMarkdown>
+            )}
           </section>
         )}
 

@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PublicRecipe } from "@/lib/publicData";
+import StructuredRecipe from "@/components/StructuredRecipe";
+import { hasStructuredContent } from "@/lib/recipe";
 
 /**
  * The interactive part of a recipe profile: recipe/transcription tabs on the
@@ -16,8 +18,12 @@ export default function RecipeView({
   header?: ReactNode;
 }) {
   const [flipped, setFlipped] = useState(false);
+  const structured = hasStructuredContent(recipe.recipe_structured)
+    ? recipe.recipe_structured
+    : null;
+  const hasRecipe = !!(structured || recipe.recipe_markdown);
   const [tab, setTab] = useState<"recipe" | "transcription">(
-    recipe.recipe_markdown ? "recipe" : "transcription"
+    hasRecipe ? "recipe" : "transcription"
   );
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
   const introTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -109,10 +115,10 @@ export default function RecipeView({
     </div>
   );
 
-  const words = (recipe.recipe_markdown || recipe.transcription_front) && (
+  const words = (hasRecipe || recipe.transcription_front) && (
     <section className="mt-10 lg:mt-8">
       <div className="mb-6 flex justify-center gap-2 text-xs lg:justify-start">
-        {recipe.recipe_markdown && (
+        {hasRecipe && (
           <button
             onClick={() => setTab("recipe")}
             className={`rounded-full px-4 py-1.5 tracking-wide transition-colors ${
@@ -147,9 +153,13 @@ export default function RecipeView({
         </a>
       </div>
 
-      {tab === "recipe" && recipe.recipe_markdown ? (
+      {tab === "recipe" && hasRecipe ? (
         <div className="recipe-preview rounded-xl border border-zinc-900 bg-zinc-950/60 px-8 py-6 text-[15px] leading-relaxed text-zinc-200">
-          <ReactMarkdown>{recipe.recipe_markdown}</ReactMarkdown>
+          {structured ? (
+            <StructuredRecipe recipe={structured} />
+          ) : (
+            <ReactMarkdown>{recipe.recipe_markdown!}</ReactMarkdown>
+          )}
         </div>
       ) : (
         <div className="space-y-6">

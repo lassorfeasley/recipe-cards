@@ -37,11 +37,20 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const body = (await req.json()) as { dpi?: number; status?: string };
+  const body = (await req.json()) as {
+    dpi?: number;
+    status?: string;
+    collection_id?: string | null;
+  };
   const db = getDb();
   if (body.dpi !== undefined) db.prepare("update batches set dpi = ? where id = ?").run(body.dpi, id);
   if (body.status !== undefined)
     db.prepare("update batches set status = ? where id = ?").run(body.status, id);
+  if (body.collection_id !== undefined) {
+    // Cards inherit the batch's collection, so reassigning a batch moves its cards too.
+    db.prepare("update batches set collection_id = ? where id = ?").run(body.collection_id, id);
+    db.prepare("update cards set collection_id = ? where batch_id = ?").run(body.collection_id, id);
+  }
   const row = db.prepare("select * from batches where id = ?").get(id);
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(mapBatch(row as Parameters<typeof mapBatch>[0]));

@@ -11,6 +11,13 @@ export interface CropRect {
 export type BatchStatus = "uploaded" | "fronts_cropped" | "backs_aligned" | "complete";
 export type CardStatus = "cropped" | "extracted" | "reviewed" | "published";
 
+/** A physical recipe-box a card came from, named for its original owner. */
+export interface Collection {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
 export interface Batch {
   id: string;
   batch_number: number;
@@ -18,6 +25,8 @@ export interface Batch {
   back_path: string;
   dpi: number | null;
   status: BatchStatus;
+  /** Collection new cards in this batch are assigned to. */
+  collection_id: string | null;
   created_at: string;
 }
 
@@ -42,9 +51,45 @@ export interface Card {
   front_image: string | null;
   back_image: string | null;
   status: CardStatus;
+  /** Whose physical collection this card belongs to. */
+  collection_id: string | null;
   created_at: string;
   /** When the exported images were last uploaded to Supabase (null = pending). */
   synced_at: string | null;
+}
+
+/** One ingredient line, parsed. `raw` is the display text and the fallback when parsing fails. */
+export interface StructuredIngredient {
+  /** Modernized display text, e.g. "2 cups sugar, sifted". Always present. */
+  raw: string;
+  /** Lowercase singular tag, e.g. "sugar". Feeds the ingredients tag index. */
+  item: string;
+  /** String to survive fractions and ranges: "2", "1/2", "2-3". Null when the card gives none. */
+  quantity: string | null;
+  /** Spelled-out singular unit ("cup", "tablespoon"), null for unitless items like "3 eggs". */
+  unit: string | null;
+  /** Preparation or trait note: "sifted", "room temperature", "optional". */
+  note: string | null;
+  /** Sub-recipe this belongs to, e.g. "Filling". Null for single-part recipes. */
+  section: string | null;
+}
+
+export interface StructuredStep {
+  text: string;
+  /** Sub-recipe this belongs to, e.g. "Filling". Null for single-part recipes. */
+  section: string | null;
+}
+
+/** Machine-readable recipe, extracted alongside the prose rewrite. */
+export interface RecipeStructured {
+  ingredients: StructuredIngredient[];
+  steps: StructuredStep[];
+  /** Estimated active work time in minutes (AI estimate — cards rarely state it). */
+  prep_minutes: number | null;
+  /** Estimated total time in minutes, including baking/chilling. */
+  total_minutes: number | null;
+  /** Yield as written or inferred, e.g. "about 3 dozen cookies". */
+  yield: string | null;
 }
 
 export interface Extraction {
@@ -63,6 +108,8 @@ export interface Extraction {
   ingredients: string[] | null;
   /** The recipe rewritten in plain modern language as markdown (ingredient list + numbered steps). */
   recipe_markdown: string | null;
+  /** Machine-readable version of the recipe (parsed ingredients, steps, time estimates). */
+  recipe_structured: RecipeStructured | null;
   ai_notes: string | null;
   confidence: string | null;
   model: string | null;

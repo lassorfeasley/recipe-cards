@@ -6,6 +6,9 @@ import { readStoredFile } from "@/lib/storage";
 import { uniqueSlug } from "@/lib/slug";
 import { randomUUID } from "crypto";
 import { CATEGORIES, WRITING_MEDIUMS, BACK_RELATIONSHIPS, CONFIDENCES } from "@/lib/types";
+import type { RecipeStructured } from "@/lib/types";
+import { ingredientTags } from "@/lib/recipe";
+import { RECIPE_STRUCTURED_SCHEMA, RECIPE_STRUCTURED_RULES } from "@/lib/recipeSchema";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -39,17 +42,12 @@ const EXTRACTION_TOOL: Anthropic.Tool = {
       back_relationship: { type: ["string", "null"], enum: [...BACK_RELATIONSHIPS, null] },
       transcription_front: { type: ["string", "null"] },
       transcription_back: { type: ["string", "null"] },
-      ingredients: {
-        type: ["array", "null"],
-        items: { type: "string" },
-        description:
-          "Every ingredient mentioned in the recipe, as short lowercase singular tags with no quantities, e.g. ['flour','butter','raisin','nutmeg']",
-      },
       recipe_markdown: {
         type: ["string", "null"],
         description:
           "The recipe rewritten in clean plain modern language as markdown: a bulleted ingredient list with modernized quantities, then numbered steps. Null if the card holds no recipe.",
       },
+      recipe_structured: RECIPE_STRUCTURED_SCHEMA,
       ai_notes: {
         type: ["string", "null"],
         description: "Stains, illegible sections, dates, marginalia worth flagging",
@@ -69,8 +67,8 @@ Rules:
 - Distinguish pre-printed card text (e.g. "From My Kitchen", "Recipe", ruled headers, decorative art) from handwriting. Describe printed design in card_design, put printed attribution lines in attribution, and do NOT include pre-printed boilerplate in the transcription.
 - If the back continues the front recipe, set back_relationship to "continuation". If it is a different recipe, use "separate-recipe". If empty, "blank" (transcription_back null). If it holds notes/doodles, "notes".
 - Flag stains, tape, dates, pinholes, margin notes, or anything historically interesting in ai_notes.
-- ingredients: list every ingredient the recipe calls for as short lowercase tags without quantities ("flour", "brown sugar", "raisin"). Use common modern names (oleo -> "margarine") so tags are consistent across cards.
 - recipe_markdown: separately from the verbatim transcription, rewrite the recipe in clean modern plain language as markdown. Start with "## Ingredients" as a bulleted list (spell out abbreviations: "1 c." -> "1 cup", "2 T." -> "2 tablespoons"), then "## Steps" as a numbered list of clear instructions in logical order, combining front and back when the back continues the recipe. Include oven temperatures, times, and yields where given. Do not invent quantities or steps that are not on the card; where something is illegible or missing, note it in italics.
+- ${RECIPE_STRUCTURED_RULES.split("\n").join("\n- ")}
 - Use the record_extraction tool for your answer.`;
 
 async function prepareImage(storagePath: string): Promise<string> {
@@ -92,8 +90,8 @@ interface ExtractionResult {
   back_relationship?: string | null;
   transcription_front?: string | null;
   transcription_back?: string | null;
-  ingredients?: string[] | null;
   recipe_markdown?: string | null;
+  recipe_structured?: RecipeStructured | null;
   ai_notes?: string | null;
   confidence?: string;
 }
@@ -165,12 +163,15 @@ export async function POST(req: NextRequest) {
   const data = toolUse.input as ExtractionResult;
 
   const extractionId = randomUUID();
+  // Tags derive from the structured items so the two can never disagree.
+  const tags = ingredientTags(data.recipe_structured);
   db.prepare(
     `insert into extractions (
        id, card_id, title, category, writing_medium, ink_colors, card_design,
        attribution, back_relationship, transcription_front, transcription_back,
-       ingredients, recipe_markdown, ai_notes, confidence, model, raw_response, reviewed
-     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+       ingredients, recipe_markdown, recipe_structured, ai_notes, confidence, model,
+       raw_response, reviewed
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
   ).run(
     extractionId,
     card_id,
@@ -183,8 +184,9 @@ export async function POST(req: NextRequest) {
     data.back_relationship ?? null,
     data.transcription_front ?? null,
     data.transcription_back ?? null,
-    data.ingredients ? JSON.stringify(data.ingredients) : null,
+    tags ? JSON.stringify(tags) : null,
     data.recipe_markdown ?? null,
+    data.recipe_structured ? JSON.stringify(data.recipe_structured) : null,
     data.ai_notes ?? null,
     data.confidence ?? null,
     MODEL,

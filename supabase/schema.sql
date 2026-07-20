@@ -9,6 +9,13 @@
 -- Tables
 -- ---------------------------------------------------------------------------
 
+-- A physical recipe-box a card came from, named for its original owner.
+create table collections (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null unique,
+  created_at timestamptz not null default now()
+);
+
 -- Light provenance for each scanned folder (no scan files are stored).
 create table batches (
   id            uuid primary key default gen_random_uuid(),
@@ -33,6 +40,7 @@ create table cards (
   back_image      text,
   status          text not null default 'cropped'
     check (status in ('cropped', 'extracted', 'reviewed', 'published')),
+  collection_id   uuid references collections(id),
   created_at      timestamptz not null default now(),
   unique (batch_id, position)
 );
@@ -58,6 +66,7 @@ create table extractions (
   transcription_back  text,
   ingredients         text[],  -- lowercase ingredient tags, e.g. {'flour','raisin'}
   recipe_markdown     text,    -- plain-language rewrite of the recipe, as markdown
+  recipe_structured   jsonb,   -- { ingredients: [{raw,item,quantity,unit,note,section}], steps: [{text,section}], prep_minutes, total_minutes, yield }
   ai_notes            text,
   confidence          text
     check (confidence is null or confidence in ('high','medium','low')),
@@ -90,6 +99,13 @@ create index cards_status on cards (status);
 alter table batches     enable row level security;
 alter table cards       enable row level security;
 alter table extractions enable row level security;
+alter table collections enable row level security;
+
+-- Collection names are public metadata ("from the box of ___").
+create policy "anon reads collections"
+  on collections for select
+  to anon
+  using (true);
 
 create policy "anon reads published cards"
   on cards for select

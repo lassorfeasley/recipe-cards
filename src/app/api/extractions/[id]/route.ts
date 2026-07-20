@@ -26,6 +26,7 @@ export async function PATCH(
   const body = (await req.json()) as Record<string, unknown> & {
     ink_colors?: string[] | null;
     ingredients?: string[] | null;
+    recipe_structured?: object | null;
     reviewed?: boolean;
   };
   const db = getDb();
@@ -45,6 +46,12 @@ export async function PATCH(
   if ("ink_colors" in body) {
     db.prepare("update extractions set ink_colors = ? where id = ?").run(
       body.ink_colors ? JSON.stringify(body.ink_colors) : null,
+      id
+    );
+  }
+  if ("recipe_structured" in body) {
+    db.prepare("update extractions set recipe_structured = ? where id = ?").run(
+      body.recipe_structured ? JSON.stringify(body.recipe_structured) : null,
       id
     );
   }

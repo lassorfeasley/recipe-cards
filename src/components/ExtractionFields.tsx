@@ -2,8 +2,9 @@
 
 import { useState, type Dispatch, type SetStateAction } from "react";
 import ReactMarkdown from "react-markdown";
-import type { Extraction } from "@/lib/types";
+import type { Extraction, RecipeStructured } from "@/lib/types";
 import { CATEGORIES, WRITING_MEDIUMS, BACK_RELATIONSHIPS, CONFIDENCES } from "@/lib/types";
+import StructuredRecipe from "@/components/StructuredRecipe";
 
 const input =
   "w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 focus:border-cyan-600 focus:outline-none";
@@ -17,6 +18,39 @@ export default function ExtractionFields({
   onChange: Dispatch<SetStateAction<Partial<Extraction>>>;
 }) {
   const [previewRecipe, setPreviewRecipe] = useState(false);
+  const [previewStructured, setPreviewStructured] = useState(true);
+  const [structuredError, setStructuredError] = useState<string | null>(null);
+
+  // The JSON editor holds free text; only valid JSON flows into the draft.
+  const draftSerialized = draft.recipe_structured
+    ? JSON.stringify(draft.recipe_structured, null, 2)
+    : "";
+  const [structuredText, setStructuredText] = useState(draftSerialized);
+  const [lastDraftValue, setLastDraftValue] = useState(draftSerialized);
+  if (draftSerialized !== lastDraftValue) {
+    // Draft was replaced from outside (card switch / re-extract) — reset the editor.
+    setLastDraftValue(draftSerialized);
+    setStructuredText(draftSerialized);
+    setStructuredError(null);
+  }
+
+  const onStructuredChange = (text: string) => {
+    setStructuredText(text);
+    if (text.trim() === "") {
+      setStructuredError(null);
+      setLastDraftValue("");
+      onChange((d) => ({ ...d, recipe_structured: null }));
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text) as RecipeStructured;
+      setStructuredError(null);
+      setLastDraftValue(JSON.stringify(parsed, null, 2));
+      onChange((d) => ({ ...d, recipe_structured: parsed }));
+    } catch (e) {
+      setStructuredError(e instanceof Error ? e.message : "invalid JSON");
+    }
+  };
 
   const set = (field: keyof Extraction) => (value: string) =>
     onChange((d) => ({ ...d, [field]: value === "" ? null : value }));
@@ -161,6 +195,39 @@ export default function ExtractionFields({
             value={draft.recipe_markdown ?? ""}
             placeholder={"## Ingredients\n- 1 cup sugar\n\n## Steps\n1. Cream the sugar…"}
             onChange={(e) => set("recipe_markdown")(e.target.value)}
+          />
+        )}
+      </div>
+      <div className="col-span-2 text-xs text-zinc-500">
+        <div className="flex items-center justify-between">
+          <span>
+            Structured recipe (JSON)
+            {structuredError && <b className="ml-2 text-red-400">{structuredError}</b>}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPreviewStructured((v) => !v)}
+            className="rounded px-2 py-0.5 text-[11px] text-cyan-400 hover:bg-zinc-900"
+          >
+            {previewStructured ? "Edit" : "Preview"}
+          </button>
+        </div>
+        {previewStructured ? (
+          <div className="recipe-preview mt-1 min-h-24 rounded border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+            {draft.recipe_structured ? (
+              <StructuredRecipe recipe={draft.recipe_structured} />
+            ) : (
+              <em className="text-zinc-600">No structured recipe yet — re-run extraction.</em>
+            )}
+          </div>
+        ) : (
+          <textarea
+            className={`${input} min-h-40 font-mono text-[12px] leading-5 ${
+              structuredError ? "border-red-700" : ""
+            }`}
+            value={structuredText}
+            spellCheck={false}
+            onChange={(e) => onStructuredChange(e.target.value)}
           />
         )}
       </div>

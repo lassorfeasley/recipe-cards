@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import exifr from "exifr";
-import type { BatchWithCounts, Settings } from "@/lib/types";
+import type { BatchWithCounts, Collection, Settings } from "@/lib/types";
 import { marginPx } from "@/lib/types";
 import { BATCH_STATUS, batchNextStep } from "@/lib/status";
 
@@ -45,18 +45,22 @@ function isBack(name: string) {
 export default function BatchesPage() {
   const [batches, setBatches] = useState<BatchWithCounts[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [uploadCollectionId, setUploadCollectionId] = useState<string>("");
   const [parsed, setParsed] = useState<ParsedBatch[] | null>(null);
   const [uploadStates, setUploadStates] = useState<Record<number, UploadState>>({});
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const [b, s] = await Promise.all([
+    const [b, s, c] = await Promise.all([
       fetch("/api/batches").then((r) => r.json()),
       fetch("/api/settings").then((r) => r.json()),
+      fetch("/api/collections").then((r) => r.json()),
     ]);
     setBatches(b);
     setSettings(s);
+    setCollections(c);
   }, []);
 
   useEffect(() => {
@@ -120,6 +124,7 @@ export default function BatchesPage() {
       const form = new FormData();
       form.set("batch_number", String(b.batchNumber));
       form.set("dpi", String(b.detectedDpi ?? settings.default_dpi));
+      if (uploadCollectionId) form.set("collection_id", uploadCollectionId);
       form.set("front", b.front);
       form.set("back", b.back);
       let ok = false;
@@ -137,7 +142,7 @@ export default function BatchesPage() {
     setUploading(false);
     setParsed(null);
     refresh();
-  }, [parsed, settings, refresh]);
+  }, [parsed, settings, uploadCollectionId, refresh]);
 
   const deleteBatch = useCallback(
     async (b: BatchWithCounts) => {
@@ -150,6 +155,18 @@ export default function BatchesPage() {
         window.alert(`Delete failed (${res.status})`);
         return;
       }
+      refresh();
+    },
+    [refresh]
+  );
+
+  const setBatchCollection = useCallback(
+    async (b: BatchWithCounts, collectionId: string) => {
+      await fetch(`/api/batches/${b.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collection_id: collectionId || null }),
+      });
       refresh();
     },
     [refresh]
@@ -262,6 +279,21 @@ export default function BatchesPage() {
                     </div>
                   ))}
                 </div>
+                <label className="mt-4 flex items-center gap-2 text-sm text-zinc-400">
+                  Collection
+                  <select
+                    value={uploadCollectionId}
+                    onChange={(e) => setUploadCollectionId(e.target.value)}
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-zinc-100"
+                  >
+                    <option value="">— pick whose box these came from —</option>
+                    {collections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div className="mt-4 flex gap-3">
                   <button
                     onClick={startUpload}
@@ -322,6 +354,22 @@ export default function BatchesPage() {
                       : "cards not detected yet"}
                     {b.dpi ? ` · ${b.dpi} dpi` : ""}
                   </p>
+                  <label className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+                    Collection
+                    <select
+                      value={b.collection_id ?? ""}
+                      onChange={(e) => setBatchCollection(b, e.target.value)}
+                      className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-zinc-300"
+                      title="Whose recipe box these cards came from (applies to all cards in the batch)"
+                    >
+                      <option value="">— none —</option>
+                      {collections.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="mt-3 flex items-center gap-2 text-sm">
                     {next.done ? (
                       <span className="rounded-md bg-emerald-950 px-3 py-1.5 text-emerald-300">

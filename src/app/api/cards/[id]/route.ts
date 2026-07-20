@@ -43,6 +43,7 @@ export async function PATCH(
     front_rotate180?: boolean;
     back_rotate180?: boolean;
     faces_swapped?: boolean;
+    collection_id?: string | null;
   };
   const db = getDb();
   if (body.status !== undefined)
@@ -74,6 +75,8 @@ export async function PATCH(
       body.faces_swapped ? 1 : 0,
       id
     );
+  if (body.collection_id !== undefined)
+    db.prepare("update cards set collection_id = ? where id = ?").run(body.collection_id, id);
   const row = db.prepare("select * from cards where id = ?").get(id);
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(mapCard(row as Parameters<typeof mapCard>[0]));

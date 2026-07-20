@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Card, Extraction } from "@/lib/types";
 import { CARD_STATUS } from "@/lib/status";
@@ -155,6 +155,93 @@ function SyncPanel({ exportedCount }: { exportedCount: number }) {
   );
 }
 
+/**
+ * One-time backfill: derive recipe_structured from the already-reviewed
+ * recipe_markdown (text-only, no images, rows stay reviewed). Hidden once
+ * nothing is left to process.
+ */
+function BackfillPanel() {
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  const stopRef = useRef(false);
+
+  const check = async () => {
+    const res = await fetch("/api/backfill-structured", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dry_run: true }),
+    });
+    const data = await res.json();
+    setRemaining(typeof data.remaining === "number" ? data.remaining : 0);
+  };
+
+  useEffect(() => {
+    // Fetch-on-mount: state updates happen after the awaited response.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    check();
+  }, []);
+
+  const run = async () => {
+    stopRef.current = false;
+    setRunning(true);
+    let done = 0;
+    let tokensIn = 0;
+    let tokensOut = 0;
+    const failures: string[] = [];
+    try {
+      while (!stopRef.current) {
+        const res = await fetch("/api/backfill-structured", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_size: 8 }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        done += data.processed;
+        tokensIn += data.usage?.input_tokens ?? 0;
+        tokensOut += data.usage?.output_tokens ?? 0;
+        failures.push(...(data.errors ?? []));
+        setRemaining(data.remaining);
+        const cost = (tokensIn * 3 + tokensOut * 15) / 1_000_000;
+        setProgress(
+          `${done} structured · ~$${cost.toFixed(2)}` +
+            (failures.length ? ` · ${failures.length} failed (${failures[0]})` : "")
+        );
+        if (data.remaining === 0 || data.processed === 0) break;
+      }
+    } catch (err) {
+      setProgress(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  if (remaining === null || (remaining === 0 && !progress)) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-2 text-sm">
+      <span className="text-zinc-400">
+        Structured recipes:{" "}
+        {remaining > 0 ? (
+          <b className="text-amber-300">{remaining} reviewed card(s) to backfill</b>
+        ) : (
+          <span className="text-emerald-400">all backfilled</span>
+        )}
+      </span>
+      {remaining > 0 && (
+        <button
+          onClick={running ? () => (stopRef.current = true) : run}
+          className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-black hover:bg-amber-500"
+        >
+          {running ? "Stop" : "Backfill from reviewed recipes"}
+        </button>
+      )}
+      {progress && <span className="text-xs text-zinc-500">{progress}</span>}
+    </div>
+  );
+}
+
 export default function LibraryPage() {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [source, setSource] = useState<"supabase" | "local" | null>(null);
@@ -205,6 +292,7 @@ export default function LibraryPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <BackfillPanel />
           <SyncPanel exportedCount={entries?.length ?? 0} />
           <input
             type="search"

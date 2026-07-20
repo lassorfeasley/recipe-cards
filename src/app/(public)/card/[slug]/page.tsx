@@ -1,7 +1,28 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getRecipeBySlug } from "@/lib/publicData";
+import { getRecipeBySlug, type PublicRecipe } from "@/lib/publicData";
 import RecipeView from "@/components/RecipeView";
+import { formatMinutes, hasStructuredContent, toIsoDuration } from "@/lib/recipe";
+
+/** schema.org Recipe JSON-LD for rich results in search. */
+function recipeJsonLd(recipe: PublicRecipe): object {
+  const s = hasStructuredContent(recipe.recipe_structured) ? recipe.recipe_structured : null;
+  return {
+    "@context": "https://schema.org",
+    "@type": "Recipe",
+    name: recipe.title,
+    image: [recipe.front_image],
+    ...(recipe.attribution && { author: { "@type": "Person", name: recipe.attribution } }),
+    ...(recipe.category && { recipeCategory: recipe.category }),
+    ...(s?.ingredients.length && { recipeIngredient: s.ingredients.map((i) => i.raw) }),
+    ...(s?.steps.length && {
+      recipeInstructions: s.steps.map((step) => ({ "@type": "HowToStep", text: step.text })),
+    }),
+    ...(s?.prep_minutes != null && { prepTime: toIsoDuration(s.prep_minutes) }),
+    ...(s?.total_minutes != null && { totalTime: toIsoDuration(s.total_minutes) }),
+    ...(s?.yield && { recipeYield: s.yield }),
+  };
+}
 
 export const revalidate = 120;
 
@@ -31,8 +52,16 @@ export default async function RecipePage({ params }: { params: Promise<{ slug: s
   if (!data) notFound();
   const { recipe, prev, next } = data;
 
+  const structured = hasStructuredContent(recipe.recipe_structured)
+    ? recipe.recipe_structured
+    : null;
+
   return (
     <main className="px-4 pb-24 pt-16 sm:px-6">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(recipeJsonLd(recipe)) }}
+      />
       <RecipeView
         recipe={recipe}
         header={
@@ -40,9 +69,17 @@ export default async function RecipePage({ params }: { params: Promise<{ slug: s
             <h1 className="font-serif text-3xl text-amber-50 sm:text-4xl">{recipe.title}</h1>
             <p className="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.25em] text-zinc-500 lg:justify-start">
               {recipe.category && <span>{recipe.category}</span>}
+              {structured?.total_minutes != null && (
+                <span title="Estimated">~{formatMinutes(structured.total_minutes)}</span>
+              )}
               {recipe.attribution && (
                 <span className="normal-case italic tracking-normal text-zinc-400">
                   from the kitchen of {recipe.attribution}
+                </span>
+              )}
+              {recipe.collection && (
+                <span className="normal-case italic tracking-normal text-zinc-500">
+                  {recipe.collection}&rsquo;s recipe box
                 </span>
               )}
             </p>

@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 import { getPublishedRecipes } from "@/lib/publicData";
-import { OG_COLORS, OG_SIZE, fetchCardImage, loadGoogleFont } from "@/lib/og";
+import { OG_COLORS, OG_SIZE, fetchCardImage } from "@/lib/og";
 
 export const alt = "Grandma's Recipe Cards — a family archive of handwritten recipe cards";
 export const size = OG_SIZE;
@@ -15,14 +15,7 @@ function sample<T>(items: T[], count: number): T[] {
 }
 
 export default async function Image() {
-  const title = "Grandma's Recipe Cards";
-  const subtitle = "A family archive of handwritten recipe cards";
-
-  const [recipes, serif, serifBold] = await Promise.all([
-    getPublishedRecipes().catch(() => []),
-    loadGoogleFont("EB Garamond", 500, title + subtitle),
-    loadGoogleFont("Playfair Display", 700, title),
-  ]);
+  const recipes = await getPublishedRecipes().catch(() => []);
 
   // Spread candidates across the deck, then keep the first few whose photos
   // actually decode (skipping any WebP/HEIC/missing images) so no blank cards.
@@ -38,15 +31,9 @@ export default async function Image() {
   );
   const fan = resolved.filter((r): r is { id: string; src: string } => !!r.src).slice(0, 5);
   const center = (fan.length - 1) / 2;
-  const cardW = 340;
-  const cardH = Math.round((cardW * 3) / 5); // 5:3 fronts
 
-  const fonts = [
-    ...(serif ? [{ name: "EB Garamond", data: serif, weight: 500 as const }] : []),
-    ...(serifBold
-      ? [{ name: "Playfair Display", data: serifBold, weight: 700 as const }]
-      : []),
-  ];
+  const cardW = 380;
+  const cardH = Math.round((cardW * 3) / 5); // 5:3 fronts
 
   return new ImageResponse(
     (
@@ -55,121 +42,52 @@ export default async function Image() {
           width: "100%",
           height: "100%",
           display: "flex",
-          flexDirection: "column",
           alignItems: "center",
-          justifyContent: "flex-start",
-          position: "relative",
-          background: `radial-gradient(120% 120% at 50% 0%, ${OG_COLORS.inkSoft} 0%, ${OG_COLORS.ink} 60%)`,
-          color: OG_COLORS.amber,
-          fontFamily: "EB Garamond, serif",
+          justifyContent: "center",
+          background: OG_COLORS.ink,
           overflow: "hidden",
         }}
       >
-        {/* warm glow behind the deck */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: -260,
-            left: 260,
-            width: 680,
-            height: 680,
-            borderRadius: "9999px",
-            background:
-              "radial-gradient(circle, rgba(255,214,150,0.16) 0%, rgba(255,214,150,0) 70%)",
-            display: "flex",
-          }}
-        />
-
-        {/* wordmark */}
-        <div
-          style={{
-            display: "flex",
-            marginTop: 66,
-            fontSize: 22,
-            letterSpacing: 8,
-            textTransform: "uppercase",
-            color: OG_COLORS.muted,
-          }}
-        >
-          The Family Kitchen
-        </div>
-        <div
-          style={{
-            display: "flex",
-            marginTop: 10,
-            fontSize: 88,
-            fontFamily: "Playfair Display, serif",
-            fontWeight: 700,
-            color: OG_COLORS.amber,
-          }}
-        >
-          {title}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            marginTop: 6,
-            fontSize: 30,
-            fontStyle: "italic",
-            color: OG_COLORS.amberDim,
-          }}
-        >
-          {subtitle}
-        </div>
-
         {/* fanned deck of real card fronts — laid out as in-flow flex items
             (Satori drops images inside position:absolute + transform, so we
             overlap with negative margins instead). */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: 8,
-            left: 0,
-            right: 0,
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "center",
-          }}
-        >
-          {fan.map((r, i) => {
-            const offset = i - center;
-            const angle = offset * 9;
-            // Outer cards ride higher so the whole hand fans up into frame.
-            const dy = -Math.abs(offset) * Math.abs(offset) * 20;
-            return (
-              <div
-                key={r.id}
+        {fan.map((r, i) => {
+          const offset = i - center;
+          const angle = offset * 8;
+          const dy = Math.abs(offset) * Math.abs(offset) * 16;
+          return (
+            <div
+              key={r.id}
+              style={{
+                display: "flex",
+                width: cardW,
+                height: cardH,
+                marginLeft: i === 0 ? 0 : -Math.round(cardW * 0.4),
+                transform: `translateY(${dy}px) rotate(${angle}deg)`,
+                borderRadius: 12,
+                padding: 8,
+                background: OG_COLORS.paper,
+                border: `1px solid ${OG_COLORS.paperEdge}`,
+                boxShadow: "0 26px 60px rgba(0,0,0,0.55)",
+              }}
+            >
+              <img
+                src={r.src}
+                alt=""
+                width={cardW - 16}
+                height={cardH - 16}
                 style={{
-                  display: "flex",
-                  width: cardW,
-                  height: cardH,
-                  marginLeft: i === 0 ? 0 : -Math.round(cardW * 0.42),
-                  transform: `translateY(${dy}px) rotate(${angle}deg)`,
-                  borderRadius: 12,
-                  padding: 8,
-                  background: OG_COLORS.paper,
-                  border: `1px solid ${OG_COLORS.paperEdge}`,
-                  boxShadow: "0 26px 60px rgba(0,0,0,0.55)",
+                  width: cardW - 16,
+                  height: cardH - 16,
+                  objectFit: "cover",
+                  borderRadius: 6,
                 }}
-              >
-                <img
-                  src={r.src}
-                  alt=""
-                  width={cardW - 16}
-                  height={cardH - 16}
-                  style={{
-                    width: cardW - 16,
-                    height: cardH - 16,
-                    objectFit: "cover",
-                    borderRadius: 6,
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
+              />
+            </div>
+          );
+        })}
       </div>
     ),
-    { ...size, fonts }
+    { ...size }
   );
 }

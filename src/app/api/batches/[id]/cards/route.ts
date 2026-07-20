@@ -42,7 +42,9 @@ export async function PUT(
   const body = (await req.json()) as SaveCropsBody;
   const db = getDb();
 
-  const batch = db.prepare("select id from batches where id = ?").get(id);
+  const batch = db.prepare("select id, collection_id from batches where id = ?").get(id) as
+    | { id: string; collection_id: string | null }
+    | undefined;
   if (!batch) return NextResponse.json({ error: "batch not found" }, { status: 404 });
 
   const save = db.transaction(() => {
@@ -68,9 +70,9 @@ export async function PUT(
         } else {
           const cardId = randomUUID();
           db.prepare(
-            `insert into cards (id, batch_id, position, front_crop, back_crop, status)
-             values (?, ?, ?, ?, ?, 'cropped')`
-          ).run(cardId, id, item.position, cropJson, cropJson);
+            `insert into cards (id, batch_id, position, front_crop, back_crop, status, collection_id)
+             values (?, ?, ?, ?, ?, 'cropped', ?)`
+          ).run(cardId, id, item.position, cropJson, cropJson, batch.collection_id);
           keptIds.push(cardId);
         }
       }

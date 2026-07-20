@@ -1,9 +1,14 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import type { Batch, Card, CropRect, Extraction } from "./types";
+import type { Batch, Card, Collection, CropRect, Extraction, RecipeStructured } from "./types";
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
+
+// Fixed IDs so the local seed and the Supabase migration refer to the same
+// rows (sync upserts collections by id).
+export const ADELINE_COLLECTION_ID = "b541028d-98ff-40d1-9e06-64b673ab9742";
+export const PHOBE_COLLECTION_ID = "43c11c93-4a1b-4423-993b-621ad8630527";
 
 let db: Database.Database | null = null;
 
@@ -65,7 +70,22 @@ export function getDb(): Database.Database {
       key   text primary key,
       value text not null
     );
+
+    create table if not exists collections (
+      id         text primary key,
+      name       text not null unique,
+      created_at text not null default (datetime('now'))
+    );
   `);
+  // Seed the two known recipe boxes on first run.
+  const collectionCount = db.prepare("select count(*) as n from collections").get() as {
+    n: number;
+  };
+  if (collectionCount.n === 0) {
+    const insert = db.prepare("insert into collections (id, name) values (?, ?)");
+    insert.run(ADELINE_COLLECTION_ID, "Adeline Feasley");
+    insert.run(PHOBE_COLLECTION_ID, "Phobe Butler");
+  }
   // Migrations for columns added after the initial schema.
   const cardCols = (db.prepare("pragma table_info(cards)").all() as Array<{ name: string }>).map(
     (c) => c.name
@@ -83,6 +103,20 @@ export function getDb(): Database.Database {
     // front.jpg and vice versa. Local workflow state only (exports bake it in).
     db.exec("alter table cards add column faces_swapped integer not null default 0");
   }
+  if (!cardCols.includes("collection_id")) {
+    // Whose physical recipe box the card came from. Everything digitized
+    // before collections existed is from Adeline Feasley's box.
+    db.exec("alter table cards add column collection_id text references collections(id)");
+    db.prepare("update cards set collection_id = ?").run(ADELINE_COLLECTION_ID);
+  }
+  const batchCols = (db.prepare("pragma table_info(batches)").all() as Array<{ name: string }>).map(
+    (c) => c.name
+  );
+  if (!batchCols.includes("collection_id")) {
+    // Default collection for cards created from this batch's scans.
+    db.exec("alter table batches add column collection_id text references collections(id)");
+    db.prepare("update batches set collection_id = ?").run(ADELINE_COLLECTION_ID);
+  }
   const extractionCols = (
     db.prepare("pragma table_info(extractions)").all() as Array<{ name: string }>
   ).map((c) => c.name);
@@ -93,6 +127,10 @@ export function getDb(): Database.Database {
   if (!extractionCols.includes("recipe_markdown")) {
     // Cleaned-up plain-language rewrite of the recipe, as markdown.
     db.exec("alter table extractions add column recipe_markdown text");
+  }
+  if (!extractionCols.includes("recipe_structured")) {
+    // JSON RecipeStructured: parsed ingredients, steps, time estimates.
+    db.exec("alter table extractions add column recipe_structured text");
   }
   return db;
 }
@@ -106,6 +144,7 @@ interface BatchRow {
   back_path: string;
   dpi: number | null;
   status: string;
+  collection_id: string | null;
   created_at: string;
 }
 
@@ -122,6 +161,7 @@ interface CardRow {
   front_image: string | null;
   back_image: string | null;
   status: string;
+  collection_id: string | null;
   created_at: string;
   synced_at: string | null;
 }
@@ -140,6 +180,7 @@ interface ExtractionRow {
   transcription_back: string | null;
   ingredients: string | null;
   recipe_markdown: string | null;
+  recipe_structured: string | null;
   ai_notes: string | null;
   confidence: string | null;
   model: string | null;
@@ -169,8 +210,17 @@ export function mapExtraction(row: ExtractionRow): Extraction {
     ...row,
     ink_colors: row.ink_colors ? (JSON.parse(row.ink_colors) as string[]) : null,
     ingredients: row.ingredients ? (JSON.parse(row.ingredients) as string[]) : null,
+    recipe_structured: row.recipe_structured
+      ? (JSON.parse(row.recipe_structured) as RecipeStructured)
+      : null,
     reviewed: !!row.reviewed,
   };
+}
+
+export function listCollections(): Collection[] {
+  return getDb()
+    .prepare("select * from collections order by name")
+    .all() as Collection[];
 }
 
 export function getSetting(key: string): string | null {

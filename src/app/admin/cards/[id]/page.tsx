@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import type { Card, Extraction } from "@/lib/types";
+import type { Card, Collection, Extraction } from "@/lib/types";
 import ExtractionFields from "@/components/ExtractionFields";
 import { CARD_STATUS } from "@/lib/status";
 
@@ -14,6 +14,7 @@ interface CardDetail {
 export default function CardProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [detail, setDetail] = useState<CardDetail | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [draft, setDraft] = useState<Partial<Extraction>>({});
   const [showBack, setShowBack] = useState(false);
@@ -36,6 +37,9 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
     // Fetch-on-mount: state updates happen after the awaited response.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
+    fetch("/api/collections")
+      .then((r) => r.json())
+      .then(setCollections);
   }, [load]);
 
   // Background push to Supabase after any change (mirrors the review queue).
@@ -101,6 +105,22 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
     }
     setBusy(null);
   }, [detail, id, load, syncCard]);
+
+  const setCollection = useCallback(
+    async (collectionId: string) => {
+      setBusy("save");
+      setMessage(null);
+      await fetch(`/api/cards/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collection_id: collectionId || null }),
+      });
+      await load();
+      await syncCard();
+      setBusy(null);
+    },
+    [id, load, syncCard]
+  );
 
   const setStatus = useCallback(
     async (status: Card["status"]) => {
@@ -191,6 +211,23 @@ export default function CardProfilePage({ params }: { params: Promise<{ id: stri
             </dd>
             <dt className="text-zinc-500">Slug</dt>
             <dd className="truncate text-zinc-200">{card.slug ?? "—"}</dd>
+            <dt className="text-zinc-500">Collection</dt>
+            <dd>
+              <select
+                value={card.collection_id ?? ""}
+                onChange={(e) => setCollection(e.target.value)}
+                disabled={busy !== null}
+                className="w-full rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-zinc-200 disabled:opacity-50"
+                title="Whose recipe box this card came from"
+              >
+                <option value="">— none —</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </dd>
             <dt className="text-zinc-500">Extraction</dt>
             <dd className="text-zinc-200">
               {extraction

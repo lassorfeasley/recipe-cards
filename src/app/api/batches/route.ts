@@ -50,7 +50,7 @@ async function normalizeScan(buf: Buffer): Promise<Buffer> {
 
 /**
  * Upload one batch: multipart form with fields
- *   batch_number, dpi (optional), front (File), back (File)
+ *   batch_number, dpi (optional), collection_id (optional), front (File), back (File)
  * Re-uploading an existing batch number replaces the scans but keeps cards.
  */
 export async function POST(req: NextRequest) {
@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
   const batchNumber = Number(form.get("batch_number"));
   const dpiRaw = form.get("dpi");
   const dpi = dpiRaw ? Number(dpiRaw) : null;
+  const collectionId = (form.get("collection_id") as string | null) || null;
   const front = form.get("front") as File | null;
   const back = form.get("back") as File | null;
 
@@ -94,17 +95,14 @@ export async function POST(req: NextRequest) {
   let id: string;
   if (existing) {
     id = existing.id;
-    db.prepare("update batches set front_path = ?, back_path = ?, dpi = coalesce(?, dpi) where id = ?").run(
-      frontPath,
-      backPath,
-      dpi,
-      id
-    );
+    db.prepare(
+      "update batches set front_path = ?, back_path = ?, dpi = coalesce(?, dpi), collection_id = coalesce(?, collection_id) where id = ?"
+    ).run(frontPath, backPath, dpi, collectionId, id);
   } else {
     id = randomUUID();
     db.prepare(
-      "insert into batches (id, batch_number, front_path, back_path, dpi, status) values (?, ?, ?, ?, ?, 'uploaded')"
-    ).run(id, batchNumber, frontPath, backPath, dpi);
+      "insert into batches (id, batch_number, front_path, back_path, dpi, status, collection_id) values (?, ?, ?, ?, ?, 'uploaded', ?)"
+    ).run(id, batchNumber, frontPath, backPath, dpi, collectionId);
   }
 
   const row = db.prepare("select * from batches where id = ?").get(id);
