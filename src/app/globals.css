@@ -117,6 +117,31 @@ body {
   }
 }
 
+/* Index page: cards that get filtered out fly off the sides of the viewport.
+   Clones are spawned at the card's last on-screen position (fixed overlay) and
+   accelerate off-screen with a slight tilt, alternating left/right. */
+@keyframes index-card-fly-left {
+  to {
+    transform: translate3d(-130vw, -3vh, 0) rotate(-8deg);
+  }
+}
+@keyframes index-card-fly-right {
+  to {
+    transform: translate3d(130vw, -3vh, 0) rotate(8deg);
+  }
+}
+.index-card-fly {
+  animation-duration: 0.45s;
+  animation-timing-function: cubic-bezier(0.5, 0, 1, 1);
+  animation-fill-mode: forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .index-card-fly {
+    animation-duration: 0.01s;
+    animation-delay: 0s !important;
+  }
+}
+
 /* Rendered markdown for the cleaned-up recipe (Tailwind preflight resets these). */
 .recipe-preview h1,
 .recipe-preview h2,

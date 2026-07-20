@@ -35,11 +35,27 @@ async function detectDpi(file: File): Promise<number | null> {
   }
 }
 
+const IMAGE_EXT = /\.(jpe?g|png|tiff?|webp)$/i;
 function isFront(name: string) {
-  return /^front\.(jpe?g)$/i.test(name);
+  return /front/i.test(name) && IMAGE_EXT.test(name);
 }
 function isBack(name: string) {
-  return /^back\.(jpe?g)$/i.test(name);
+  return /back/i.test(name) && IMAGE_EXT.test(name);
+}
+
+/**
+ * The batch number is the nearest ancestor folder that's a bare number, so
+ * both `12/Front.jpeg` and `10-18/12/Front.jpeg` (range folders grouping the
+ * scans) resolve to batch 12.
+ */
+function batchNumberFromPath(parts: string[]): number | null {
+  for (let i = parts.length - 2; i >= 0; i--) {
+    if (/^\d+$/.test(parts[i])) {
+      const n = Number(parts[i]);
+      if (Number.isInteger(n) && n > 0) return n;
+    }
+  }
+  return null;
 }
 
 export default function BatchesPage() {
@@ -51,8 +67,12 @@ export default function BatchesPage() {
   const [newCollectionName, setNewCollectionName] = useState("");
   const [savingCollection, setSavingCollection] = useState(false);
   const [parsed, setParsed] = useState<ParsedBatch[] | null>(null);
+  // Files in the picked folder that didn't map to a batch — shown as a
+  // diagnostic when detection comes up empty or incomplete.
+  const [skippedPaths, setSkippedPaths] = useState<string[]>([]);
   const [uploadStates, setUploadStates] = useState<Record<number, UploadState>>({});
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -76,20 +96,32 @@ export default function BatchesPage() {
   const onFolderPicked = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const map = new Map<number, ParsedBatch>();
+    const skipped: string[] = [];
     for (const file of Array.from(files)) {
       const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
       const parts = rel.split("/");
-      if (parts.length < 2) continue;
-      const folder = parts[parts.length - 2];
-      const num = Number(folder);
-      if (!Number.isInteger(num) || num <= 0) continue;
       const name = parts[parts.length - 1];
-      if (!isFront(name) && !isBack(name)) continue;
+      // macOS resource forks (._Front.jpeg) and .DS_Store etc.
+      if (name.startsWith(".")) continue;
+      const front = isFront(name);
+      const back = isBack(name);
+      if (!front && !back) {
+        skipped.push(rel);
+        continue;
+      }
+      // Batch number: nearest numeric ancestor folder, else a number in the
+      // filename itself ("Front 12.jpeg").
+      const num = batchNumberFromPath(parts) ?? Number(name.match(/\d+/)?.[0] ?? NaN);
+      if (!Number.isInteger(num) || num <= 0) {
+        skipped.push(rel);
+        continue;
+      }
       if (!map.has(num)) map.set(num, { batchNumber: num, front: null, back: null, detectedDpi: null });
       const entry = map.get(num)!;
-      if (isFront(name)) entry.front = file;
+      if (front) entry.front = file;
       else entry.back = file;
     }
+    setSkippedPaths(skipped);
     const list = [...map.values()].sort((a, b) => a.batchNumber - b.batchNumber);
     // Detect DPI from each front (fast — exifr reads only headers).
     await Promise.all(
@@ -100,6 +132,7 @@ export default function BatchesPage() {
     );
     setParsed(list);
     setUploadStates({});
+    setUploadError(null);
   }, []);
 
   const manifest = useMemo(() => {
@@ -115,12 +148,21 @@ export default function BatchesPage() {
       );
     const images = parsed.reduce((n, b) => n + (b.front ? 1 : 0) + (b.back ? 1 : 0), 0);
     const noDpi = parsed.filter((b) => b.front && b.back && !b.detectedDpi).length;
-    return { complete, problems, images, noDpi };
-  }, [parsed]);
+    // Uploading an existing batch number REPLACES that batch's scans (its
+    // cards are kept) — flag it loudly so a new box isn't uploaded over an
+    // old one that reused the same numbers.
+    const existingNumbers = new Set(batches.map((b) => b.batch_number));
+    const conflicts = complete
+      .map((b) => b.batchNumber)
+      .filter((n) => existingNumbers.has(n));
+    return { complete, problems, images, noDpi, conflicts };
+  }, [parsed, batches]);
 
   const startUpload = useCallback(async () => {
     if (!parsed || !settings) return;
     setUploading(true);
+    setUploadError(null);
+    const failures: string[] = [];
     for (const b of parsed) {
       if (!b.front || !b.back) continue;
       setUploadStates((s) => ({ ...s, [b.batchNumber]: "uploading" }));
@@ -131,19 +173,33 @@ export default function BatchesPage() {
       form.set("front", b.front);
       form.set("back", b.back);
       let ok = false;
+      let lastError = "";
       for (let attempt = 0; attempt < 3 && !ok; attempt++) {
         try {
           const res = await fetch("/api/batches", { method: "POST", body: form });
           ok = res.ok;
-        } catch {
+          if (!ok) {
+            const err = (await res.json().catch(() => null)) as { error?: string } | null;
+            lastError = err?.error ?? `HTTP ${res.status}`;
+            // Client-side problem (bad file, missing field): retrying won't help.
+            if (res.status < 500) break;
+          }
+        } catch (e) {
           ok = false;
+          lastError = e instanceof Error ? e.message : String(e);
         }
         if (!ok) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
       }
       setUploadStates((s) => ({ ...s, [b.batchNumber]: ok ? "done" : "error" }));
+      if (!ok) failures.push(`Batch ${b.batchNumber}: ${lastError}`);
     }
     setUploading(false);
-    setParsed(null);
+    if (failures.length > 0) {
+      // Keep the manifest open so the per-batch ✗ marks and the reason stay visible.
+      setUploadError(failures.join("\n"));
+    } else {
+      setParsed(null);
+    }
     refresh();
   }, [parsed, settings, uploadCollectionId, refresh]);
 
@@ -316,7 +372,11 @@ export default function BatchesPage() {
               // @ts-expect-error webkitdirectory is non-standard
               webkitdirectory=""
               multiple
-              onChange={(e) => onFolderPicked(e.target.files)}
+              onChange={(e) => {
+                onFolderPicked(e.target.files);
+                // Reset so re-picking the same folder fires change again.
+                e.target.value = "";
+              }}
             />
           </div>
         ) : (
@@ -340,6 +400,21 @@ export default function BatchesPage() {
                       <li key={p}>{p} — will be skipped</li>
                     ))}
                   </ul>
+                )}
+                {skippedPaths.length > 0 && (parsed.length === 0 || manifest.problems.length > 0) && (
+                  <div className="mt-3 rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200/80">
+                    <p className="mb-1 font-medium text-amber-200">
+                      {parsed.length === 0
+                        ? "No batches detected. Files need a numbered folder (1/, 2/, …) or a number in the name, plus “front”/“back” in the filename. Files seen:"
+                        : `${skippedPaths.length} file(s) didn't match any batch:`}
+                    </p>
+                    <ul className="max-h-32 overflow-auto font-mono">
+                      {skippedPaths.slice(0, 30).map((p) => (
+                        <li key={p}>{p}</li>
+                      ))}
+                      {skippedPaths.length > 30 && <li>… and {skippedPaths.length - 30} more</li>}
+                    </ul>
+                  </div>
                 )}
                 <div className="mt-3 grid max-h-64 grid-cols-2 gap-1 overflow-auto text-xs text-zinc-500 sm:grid-cols-3 md:grid-cols-4">
                   {parsed.map((b) => (
@@ -377,6 +452,20 @@ export default function BatchesPage() {
                     + New
                   </button>
                 </label>
+                {manifest.conflicts.length > 0 && (
+                  <p className="mt-3 rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+                    Batch number{manifest.conflicts.length > 1 ? "s" : ""}{" "}
+                    {manifest.conflicts.join(", ")} already exist — uploading will REPLACE those
+                    batches&apos; scans (their cards are kept). If these are new scans from a
+                    different box, renumber the folders first (e.g. continue from{" "}
+                    {Math.max(0, ...batches.map((b) => b.batch_number)) + 1}).
+                  </p>
+                )}
+                {uploadError && (
+                  <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+                    {uploadError}
+                  </pre>
+                )}
                 <div className="mt-4 flex gap-3">
                   <button
                     onClick={startUpload}
@@ -388,7 +477,10 @@ export default function BatchesPage() {
                       : `Upload ${manifest.complete.length} batches`}
                   </button>
                   <button
-                    onClick={() => setParsed(null)}
+                    onClick={() => {
+                      setParsed(null);
+                      setUploadError(null);
+                    }}
                     disabled={uploading}
                     className="rounded-lg border border-zinc-700 px-5 py-2 text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
                   >

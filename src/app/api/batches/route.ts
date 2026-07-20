@@ -54,6 +54,16 @@ async function normalizeScan(buf: Buffer): Promise<Buffer> {
  * Re-uploading an existing batch number replaces the scans but keeps cards.
  */
 export async function POST(req: NextRequest) {
+  try {
+    return await handleUpload(req);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("batch upload failed:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+async function handleUpload(req: NextRequest) {
   const form = await req.formData();
   const batchNumber = Number(form.get("batch_number"));
   const dpiRaw = form.get("dpi");
@@ -67,6 +77,17 @@ export async function POST(req: NextRequest) {
       { error: "batch_number, front and back are required" },
       { status: 400 }
     );
+  }
+  // Cloud-only placeholders (iCloud "Optimize Mac Storage") upload as 0 bytes.
+  for (const [label, f] of [["front", front], ["back", back]] as const) {
+    if (f.size === 0) {
+      return NextResponse.json(
+        {
+          error: `${label} scan "${f.name}" is empty (0 bytes) — if the folder lives in iCloud Drive, download it locally first (right-click → Download Now)`,
+        },
+        { status: 400 }
+      );
+    }
   }
 
   const frontPath = `scans/${batchNumber}/front.jpg`;

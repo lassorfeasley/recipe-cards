@@ -10,17 +10,23 @@ export interface IndexEntry {
   category: string | null;
   attribution: string | null;
   ingredients: string[] | null;
+  /** Owner / physical recipe box this card came from, e.g. "Phebe Butler". */
+  collection: string | null;
 }
 
 /** Collapsed strip height, in px. */
 const MIN_H = 60;
+/** Spacing of the blue ruled lines in the card body (23px gap + 1px line). */
+const RULE_SPACING = 24;
 /**
- * Fully focused card height: real index cards are 5×3, so the expanded
- * height is 3/5 of the list's width (measured live in the update loop).
+ * Fully focused card height: the title strip plus enough body below the red
+ * rule to expose 2.5 ruled-line spacings — a peek at the paper, not the
+ * whole card.
  */
-const CARD_RATIO = 3 / 5;
-/** Distance (px) from the focus line over which a card decays back to a strip. */
-const FALLOFF = 330;
+const MAX_H = MIN_H + Math.round(2.5 * RULE_SPACING);
+/** Distance (px) from the focus line over which a card decays back to a strip.
+    Tuned down with the smaller expanded height so the open/close still reads. */
+const FALLOFF = 160;
 /** Desktop viewport y of the focus line — the top of the list, so card 1 opens at rest. */
 const FOCUS_TOP_DESKTOP = 126;
 /**
@@ -41,6 +47,22 @@ const STAGGER = 3;
  */
 const STACK_VISIBLE = 20;
 
+/** Cap on simultaneous fly-out clones — beyond this the rest just vanish. */
+const MAX_FLYERS = 24;
+
+/** A filtered-out card mid-flight: a fixed-position clone of its last frame. */
+interface FlyingCard {
+  key: string;
+  title: string;
+  category: string | null;
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  dir: -1 | 1;
+  delay: number;
+}
+
 /**
  * Client side of the Index mode. Cards are flat white rows on a dark page;
  * the card at the top of the list is expanded, showing its attribution and a
@@ -50,6 +72,8 @@ const STACK_VISIBLE = 20;
 export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const [query, setQuery] = useState("");
   const [categories, setCategories] = useState<Set<string>>(new Set());
+  // Selected owner (recipe box); null = show every owner's cards.
+  const [owner, setOwner] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   // Height of the fixed mobile header; 0 on desktop where it's display:none.
@@ -76,19 +100,36 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const focusTop = stackTop + MIN_H / 2;
 
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [flying, setFlying] = useState<FlyingCard[]>([]);
+  // Last known viewport rects of visible cards, captured synchronously in the
+  // filter handlers — by the time React re-renders, the DOM nodes are gone.
+  const lastRects = useRef<Map<string, DOMRect>>(new Map());
+
+  // Owners present in the data, with their card counts. The toggle only
+  // appears when there's more than one box to switch between.
+  const owners = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of entries) {
+      if (!e.collection) continue;
+      counts.set(e.collection, (counts.get(e.collection) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [entries]);
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const e of entries) {
+      if (owner && (e.collection ?? null) !== owner) continue;
       const c = e.category ?? "uncategorized";
       counts.set(c, (counts.get(c) ?? 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [entries]);
+  }, [entries, owner]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
+      if (owner && (e.collection ?? null) !== owner) return false;
       if (categories.size > 0 && !categories.has(e.category ?? "uncategorized")) return false;
       if (!q) return true;
       return (
@@ -97,7 +138,25 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         (e.ingredients ?? []).some((ing) => ing.includes(q))
       );
     });
-  }, [entries, query, categories]);
+  }, [entries, query, categories, owner]);
+
+  /** Snapshot the on-screen position of every visible card, keyed by id.
+      The list renders one <a> per match in order, so pair them by index. */
+  const captureRects = () => {
+    const list = listRef.current;
+    if (!list) return;
+    const map = new Map<string, DOMRect>();
+    const anchors = Array.from(list.children).filter(
+      (el) => el.tagName === "A"
+    );
+    for (let i = 0; i < anchors.length && i < matches.length; i++) {
+      const r = anchors[i].getBoundingClientRect();
+      if (r.bottom > 0 && r.top < window.innerHeight) {
+        map.set(matches[i].id, r);
+      }
+    }
+    lastRects.current = map;
+  };
 
   // Scroll-driven fisheye + pile stagger: size every card from its distance
   // to the focus line, and assign each pinned card its slot in the pile.
@@ -115,7 +174,18 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       );
       if (cards.length === 0) return;
 
-      const maxH = Math.round(list.clientWidth * CARD_RATIO);
+      const maxH = MAX_H;
+      // The very last card opens into a complete 3×5 index card (h = w × 3/5)
+      // rather than the partial peek — it's the end of the road, and the
+      // h-screen spacer below gives it the room. Clamped so it still fits
+      // under the stack line on short viewports.
+      const lastMaxH = Math.max(
+        maxH,
+        Math.min(
+          Math.round(list.clientWidth * (3 / 5)),
+          window.innerHeight - stackTop - 24
+        )
+      );
       // The pile fans out over this many px; a card reaches full height this
       // far before the focus line, so it's already full-size when it docks
       // at the pile's lowest slot (no height jump on pinning).
@@ -146,12 +216,13 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         stackTop + STAGGER * Math.min(pinnedCount, STACK_VISIBLE - 1);
       let changed = false;
       for (let i = 0; i < cards.length; i++) {
+        const cardMaxH = i === cards.length - 1 ? lastMaxH : maxH;
         let top: number;
         let h: number;
         if (i < pinnedCount) {
           const fromNewest = pinnedCount - 1 - i;
           top = stackTop + STAGGER * Math.max(0, deepest - fromNewest);
-          h = maxH;
+          h = cardMaxH;
         } else {
           top = nextSlot;
           const d = Math.max(
@@ -160,7 +231,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
           );
           const t = Math.max(0, 1 - d / FALLOFF);
           const ease = t * t * (3 - 2 * t); // smoothstep
-          h = Math.round(MIN_H + (maxH - MIN_H) * ease);
+          h = Math.round(MIN_H + (cardMaxH - MIN_H) * ease);
         }
         const hPx = `${h}px`;
         const tPx = `${top}px`;
@@ -196,20 +267,86 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     };
   }, [matches, stackTop, focusTop]);
 
-  const toggleCategory = (c: string) =>
+  // Spawn fly-out clones for cards that just left the match list. prev is
+  // tracked in a ref so this runs once per matches change.
+  const prevMatches = useRef(matches);
+  const flightSeq = useRef(0);
+  useEffect(() => {
+    const prev = prevMatches.current;
+    prevMatches.current = matches;
+    if (prev === matches) return;
+    const nextIds = new Set(matches.map((m) => m.id));
+    const removed = prev
+      .filter((e) => !nextIds.has(e.id) && lastRects.current.has(e.id))
+      .map((e) => ({ entry: e, rect: lastRects.current.get(e.id)! }))
+      .sort((a, b) => a.rect.top - b.rect.top)
+      .slice(0, MAX_FLYERS);
+    if (removed.length === 0) return;
+    const stamp = ++flightSeq.current;
+    setFlying((f) => [
+      ...f,
+      ...removed.map(({ entry, rect }, i) => ({
+        key: `${entry.id}-${stamp}`,
+        title: entry.title,
+        category: entry.category,
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+        dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
+        delay: i * 25,
+      })),
+    ]);
+  }, [matches]);
+
+  const toggleCategory = (c: string) => {
+    captureRects();
     setCategories((prev) => {
       const next = new Set(prev);
       if (next.has(c)) next.delete(c);
       else next.add(c);
       return next;
     });
+  };
 
   const clearFilters = () => {
+    captureRects();
     setQuery("");
     setCategories(new Set());
   };
 
+  const selectOwner = (value: string | null) => {
+    if (value === owner) return;
+    captureRects();
+    setOwner(value);
+  };
+
   const filtered = query.trim() !== "" || categories.size > 0;
+
+  const ownerToggle =
+    owners.length >= 2 ? (
+      <div className="flex divide-x divide-zinc-700 border border-zinc-700 md:flex-col md:divide-x-0 md:divide-y">
+        {[{ label: "All", value: null as string | null }, ...owners.map(([name]) => ({ label: name, value: name as string | null }))].map(
+          ({ label, value }) => {
+            const active = owner === value;
+            return (
+              <button
+                key={label}
+                onClick={() => selectOwner(value)}
+                aria-pressed={active}
+                className={`min-w-0 flex-1 truncate px-2.5 py-1.5 text-center text-xs transition-colors md:text-left ${
+                  active
+                    ? "bg-zinc-100 font-medium text-zinc-900"
+                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          }
+        )}
+      </div>
+    ) : null;
 
   const categoryChips = (
     <div className="flex flex-wrap gap-1.5 md:flex-col md:gap-1">
@@ -266,7 +403,10 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
           <input
             type="search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              captureRects();
+              setQuery(e.target.value);
+            }}
             placeholder="Search recipes…"
             className="h-10 min-w-0 flex-1 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400"
           />
@@ -285,6 +425,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             )}
           </button>
         </div>
+        {ownerToggle && <div className="mt-2">{ownerToggle}</div>}
         {filtersOpen && (
           <div className="absolute inset-x-0 top-full max-h-[60vh] overflow-y-auto border-b border-zinc-800 bg-zinc-950/95 px-4 pb-4 pt-3 backdrop-blur">
             <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
@@ -312,13 +453,25 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            captureRects();
+            setQuery(e.target.value);
+          }}
           placeholder="Search recipes…"
           className="mt-5 w-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400"
         />
         <p className="mt-2 text-xs text-zinc-500">
           Searches titles, attributions & ingredients
         </p>
+
+        {ownerToggle && (
+          <div className="mt-7">
+            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
+              Owner
+            </p>
+            {ownerToggle}
+          </div>
+        )}
 
         <div className="mt-7">
           <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
@@ -393,6 +546,57 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         {/* end-of-scroll room, inside the sticky containing block */}
         <div aria-hidden className="h-screen shrink-0" />
       </div>
+
+      {/* fly-out clones of cards that were just filtered away */}
+      {flying.length > 0 && (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-0 z-40 overflow-hidden"
+        >
+          {flying.map((f) => (
+            <div
+              key={f.key}
+              onAnimationEnd={() =>
+                setFlying((cur) => cur.filter((x) => x.key !== f.key))
+              }
+              className="index-card-fly absolute overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
+              style={{
+                top: f.top,
+                left: f.left,
+                width: f.width,
+                height: f.height,
+                animationName:
+                  f.dir < 0 ? "index-card-fly-left" : "index-card-fly-right",
+                animationDelay: `${f.delay}ms`,
+              }}
+            >
+              <span
+                className="flex items-center justify-between gap-4"
+                style={{ height: MIN_H }}
+              >
+                <span className="truncate text-lg font-medium tracking-tight text-zinc-900">
+                  {f.title}
+                </span>
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-400">
+                  {f.category ?? ""}
+                </span>
+              </span>
+              <span
+                className="pointer-events-none absolute inset-x-0 bottom-0"
+                style={{
+                  top: MIN_H,
+                  background:
+                    "repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(112, 146, 190, 0.35) 23px, rgba(112, 146, 190, 0.35) 24px)",
+                }}
+              />
+              <span
+                className="pointer-events-none absolute inset-x-0 z-10 h-px bg-[#c45850]/40"
+                style={{ top: MIN_H - 1 }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -84,7 +84,7 @@ export function getDb(): Database.Database {
   if (collectionCount.n === 0) {
     const insert = db.prepare("insert into collections (id, name) values (?, ?)");
     insert.run(ADELINE_COLLECTION_ID, "Adeline Feasley");
-    insert.run(PHOBE_COLLECTION_ID, "Phobe Butler");
+    insert.run(PHOBE_COLLECTION_ID, "Phebe Butler");
   }
   // Migrations for columns added after the initial schema.
   const cardCols = (db.prepare("pragma table_info(cards)").all() as Array<{ name: string }>).map(

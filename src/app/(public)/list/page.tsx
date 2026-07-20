@@ -25,6 +25,7 @@ export default async function IndexPage() {
     category: r.category,
     attribution: r.attribution,
     ingredients: r.ingredients,
+    collection: r.collection,
   }));
 
   return (
