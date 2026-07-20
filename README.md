@@ -67,9 +67,39 @@ Press `?` on either screen for the in-app cheat-sheet.
 
 | Var | Purpose |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | required for `/api/extract` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL — required by the public site (build + runtime) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key — required by the public site (RLS gates what's visible) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key — required for the admin **Sync to Supabase** action |
+| `ANTHROPIC_API_KEY` | required for `/api/extract` (admin AI extraction) |
 | `ANTHROPIC_MODEL` | optional, defaults to `claude-sonnet-4-6` |
-| `DATA_DIR` | optional, defaults to `./data` |
+| `ADMIN_USER` | optional, defaults to `admin` — Basic Auth username for the admin gate |
+| `ADMIN_PASSWORD` | when set, `/admin/*` and `/api/*` require HTTP Basic Auth (see [Deploying](#deploying-to-vercel)) |
+| `DATA_DIR` | optional, defaults to `./data` — local SQLite + image storage (local only) |
+
+## Deploying to Vercel
+
+The **public site** is fully serverless-ready: it reads everything from Supabase
+(anon key), so it needs no local database or filesystem. The **admin tool** only
+_fully_ functions locally — it uses SQLite (`better-sqlite3`) and writes cropped
+images to `DATA_DIR`, neither of which persists on Vercel's read-only, ephemeral
+filesystem. Keep running the scan → crop → extract → review → **Sync to Supabase**
+workflow on your machine; syncing publishes the results that the hosted public
+site serves.
+
+`src/proxy.ts` (Next.js's renamed middleware) puts `/admin/*` and `/api/*` behind
+HTTP Basic Auth **whenever `ADMIN_PASSWORD` is set**. Locally that variable is
+unset, so the admin stays password-free; on Vercel you set it, so the admin UI is
+reachable but private (the public pages are never gated).
+
+Steps:
+
+1. Push this repo to GitHub and import it into Vercel (framework auto-detected as Next.js).
+2. In **Project → Settings → Environment Variables**, add:
+   - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` — **required at build time**; the home and index pages prerender from Supabase, so the build fails without them.
+   - `ADMIN_USER` (optional) and `ADMIN_PASSWORD` — to lock down the admin/API on the deployment.
+   - `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY` — only if you intend to trigger sync/extraction from the hosted admin (otherwise omit; those actions are best run locally).
+3. Deploy. Public pages revalidate every 2 minutes, so cards you sync from your
+   local admin appear on the hosted site within a couple of minutes — no redeploy.
 
 ## Test fixtures
 

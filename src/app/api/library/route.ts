@@ -74,7 +74,7 @@ function fromLocal() {
     "select * from extractions where card_id = ? order by created_at desc limit 1"
   );
   return cards.map((row) => {
-    const card = mapCard(row as Parameters<typeof mapCard>[0]);
+    const card = mapCard(row as unknown as Parameters<typeof mapCard>[0]);
     const extraction = latestExtraction.get(card.id);
     return {
       card: {
