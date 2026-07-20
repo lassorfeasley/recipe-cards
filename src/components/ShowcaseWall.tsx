@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export interface WallRecipe {
   id: string;
@@ -235,12 +235,128 @@ function CardGrid({
  */
 export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
   const container = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
   const [durY, setDurY] = useState<number | null>(null);
   const [durX, setDurX] = useState<number | null>(null);
   const [visCols, setVisCols] = useState<number | null>(null);
   const [lite, setLite] = useState(false);
+  // Once the user drags, the auto-pan stops for good and the wall becomes a
+  // freely pannable map (drag + momentum, wrapping on the 2×2 torus).
+  const [manual, setManual] = useState(false);
+  const pos = useRef({ x: 0, y: 0 });
+  const vel = useRef({ x: 0, y: 0 });
+  const raf = useRef<number | null>(null);
+  const moved = useRef(0);
 
   const deck = useMemo(() => padDeck(recipes), [recipes]);
+
+  /** Wrap offsets onto the seamless range (one grid copy tall, one tile wide). */
+  const applyTransform = useCallback(() => {
+    const outerEl = container.current;
+    const innerEl = inner.current;
+    if (!outerEl || !innerEl) return;
+    const halfH = outerEl.offsetHeight / 2;
+    const halfW = innerEl.offsetWidth / 2;
+    let { x, y } = pos.current;
+    if (halfH > 0) y = ((y % halfH) + halfH) % halfH - halfH;
+    if (halfW > 0) x = ((x % halfW) + halfW) % halfW - halfW;
+    pos.current = { x, y };
+    outerEl.style.transform = `translate3d(0, ${y}px, 0)`;
+    innerEl.style.transform = `translate3d(${x}px, 0, 0)`;
+  }, []);
+
+  /** Freeze the CSS pan exactly where it is and take over with transforms. */
+  const enterManual = useCallback(() => {
+    if (manual) return;
+    const outerEl = container.current;
+    const innerEl = inner.current;
+    if (!outerEl || !innerEl) return;
+    const read = (el: HTMLElement) => {
+      const t = getComputedStyle(el).transform;
+      if (!t || t === "none") return { x: 0, y: 0 };
+      const m = new DOMMatrixReadOnly(t);
+      return { x: m.m41, y: m.m42 };
+    };
+    pos.current = { x: read(innerEl).x, y: read(outerEl).y };
+    outerEl.style.animation = "none";
+    innerEl.style.animation = "none";
+    setManual(true);
+    applyTransform();
+  }, [manual, applyTransform]);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (!e.isPrimary) return;
+      if (raf.current !== null) {
+        cancelAnimationFrame(raf.current);
+        raf.current = null;
+      }
+      enterManual();
+      moved.current = 0;
+      vel.current = { x: 0, y: 0 };
+      const pointerId = e.pointerId;
+      let lastX = e.clientX;
+      let lastY = e.clientY;
+      let lastT = performance.now();
+
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        const dx = ev.clientX - lastX;
+        const dy = ev.clientY - lastY;
+        const now = performance.now();
+        const dt = Math.max(now - lastT, 1);
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        lastT = now;
+        moved.current += Math.abs(dx) + Math.abs(dy);
+        pos.current = { x: pos.current.x + dx, y: pos.current.y + dy };
+        vel.current = { x: (dx / dt) * 1000, y: (dy / dt) * 1000 };
+        applyTransform();
+      };
+      const up = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        // Map-style momentum: glide and decay after release.
+        if (Math.hypot(vel.current.x, vel.current.y) < 60) return;
+        let prev = performance.now();
+        const step = (now: number) => {
+          const dt = (now - prev) / 1000;
+          prev = now;
+          const friction = Math.exp(-dt * 4);
+          vel.current.x *= friction;
+          vel.current.y *= friction;
+          pos.current.x += vel.current.x * dt;
+          pos.current.y += vel.current.y * dt;
+          applyTransform();
+          raf.current =
+            Math.hypot(vel.current.x, vel.current.y) > 15
+              ? requestAnimationFrame(step)
+              : null;
+        };
+        raf.current = requestAnimationFrame(step);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    },
+    [enterManual, applyTransform]
+  );
+
+  // A real drag must not "click through" to the card link under the finger.
+  const onClickCapture = useCallback((e: React.MouseEvent) => {
+    if (moved.current > 8) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (raf.current !== null) cancelAnimationFrame(raf.current);
+    };
+  }, []);
 
   // Phones/tablets and low-memory or reduced-motion devices can't composite
   // ~1600 per-card flip layers without crashing, so drop to the lite wall.
@@ -286,24 +402,36 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
   const ready = durX != null && durY != null;
 
   return (
-    <main className="fixed inset-0 overflow-hidden bg-black">
+    <main
+      className="fixed inset-0 touch-none select-none overflow-hidden bg-black"
+      onPointerDown={onPointerDown}
+      onClickCapture={onClickCapture}
+      onDragStart={(e) => e.preventDefault()}
+    >
       {/* Two independent seamless loops composed: outer drifts up, inner drifts
-          right — together the cards pan toward the top right. */}
+          right — together the cards pan toward the top right. After the first
+          drag both animations are frozen and the same two elements are driven
+          by pointer transforms instead (map-style panning with momentum). */}
       <div
         ref={container}
         className="pan-y w-max will-change-transform"
         style={
-          ready && !PAN_PAUSED
-            ? { animationDuration: `${durY}s` }
-            : { animationPlayState: "paused" }
+          manual
+            ? undefined
+            : ready && !PAN_PAUSED
+              ? { animationDuration: `${durY}s` }
+              : { animationPlayState: "paused" }
         }
       >
         <div
+          ref={inner}
           className="pan-x flex w-max flex-col will-change-transform"
           style={
-            ready && !PAN_PAUSED
-              ? { animationDuration: `${durX}s` }
-              : { animationPlayState: "paused" }
+            manual
+              ? undefined
+              : ready && !PAN_PAUSED
+                ? { animationDuration: `${durX}s` }
+                : { animationPlayState: "paused" }
           }
         >
           <div className="flex">
@@ -317,7 +445,7 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
         </div>
       </div>
       <p className="pointer-events-none fixed inset-x-0 bottom-3 text-center text-[10px] tracking-widest text-zinc-700">
-        {recipes.length} RECIPES FROM GRANDMA&apos;S KITCHEN
+        FEASLEY&apos;S RECIPES · {recipes.length} CARDS
       </p>
     </main>
   );

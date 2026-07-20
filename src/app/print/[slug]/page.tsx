@@ -10,7 +10,7 @@ export const revalidate = 120;
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const data = await getRecipeBySlug(slug);
-  if (!data) return { title: "Grandma's Recipe Cards" };
+  if (!data) return { title: "Feasley's Recipes" };
   return { title: `${data.recipe.title} — printable card` };
 }
 
@@ -84,7 +84,7 @@ export default async function PrintPage({ params }: { params: Promise<{ slug: st
         )}
 
         <footer className="mt-10 border-t border-zinc-300 pt-3 text-[10px] uppercase tracking-[0.25em] text-zinc-400">
-          Grandma&apos;s Recipe Cards
+          Feasley&apos;s Recipes
         </footer>
       </main>
     </div>

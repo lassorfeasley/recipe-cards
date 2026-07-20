@@ -44,7 +44,7 @@ export default async function Image({
           fontSize: 64,
         }}
       >
-        {data?.recipe.title ?? "Grandma's Recipe Cards"}
+        {data?.recipe.title ?? "Feasley's Recipes"}
       </div>
     ),
     { ...OG_SIZE }

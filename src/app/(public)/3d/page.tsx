@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "The Recipe Box — Grandma's Recipe Cards",
+  title: "The Recipe Box",
 };
 
 /** Placeholder for the 3D skeuomorphic mode (not yet scoped). */

@@ -16,21 +16,21 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(getSiteUrl()),
   title: {
-    default: "Grandma's Recipe Cards",
-    template: "%s — Grandma's Recipe Cards",
+    default: "Feasley's Recipes",
+    template: "%s — Feasley's Recipes",
   },
   description:
     "A family archive of handwritten recipe cards, lovingly digitized.",
   openGraph: {
     type: "website",
-    siteName: "Grandma's Recipe Cards",
-    title: "Grandma's Recipe Cards",
+    siteName: "Feasley's Recipes",
+    title: "Feasley's Recipes",
     description:
       "A family archive of handwritten recipe cards, lovingly digitized.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Grandma's Recipe Cards",
+    title: "Feasley's Recipes",
     description:
       "A family archive of handwritten recipe cards, lovingly digitized.",
   },

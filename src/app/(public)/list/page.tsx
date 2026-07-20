@@ -4,7 +4,7 @@ import IndexBrowser from "@/components/IndexBrowser";
 export const revalidate = 120;
 
 export const metadata = {
-  title: "Recipe Index — Grandma's Recipe Cards",
+  title: "Recipe Index",
 };
 
 /**
