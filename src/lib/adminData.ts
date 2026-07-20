@@ -420,6 +420,16 @@ export async function createBlankExtraction(
 }
 
 export async function listCollectionsAdmin(): Promise<Collection[]> {
+  // Prefer local when it has rows — batch upload needs local FKs, and the
+  // local DB seeds Adeline/Phobe. Fall back to Supabase when local is empty
+  // (hosted admin with no usable SQLite).
+  try {
+    const { listCollections } = await import("@/lib/db");
+    const local = listCollections();
+    if (local.length > 0) return local;
+  } catch {
+    // no local DB
+  }
   if (supabaseConfigured()) {
     try {
       const supabase = getSupabaseAdmin();
@@ -430,13 +440,8 @@ export async function listCollectionsAdmin(): Promise<Collection[]> {
       if (error) throw new Error(error.message);
       return (data ?? []) as Collection[];
     } catch (e) {
-      console.error("collections: supabase read failed, falling back to local:", e);
+      console.error("collections: supabase read failed:", e);
     }
   }
-  try {
-    const { listCollections } = await import("@/lib/db");
-    return listCollections();
-  } catch {
-    return [];
-  }
+  return [];
 }

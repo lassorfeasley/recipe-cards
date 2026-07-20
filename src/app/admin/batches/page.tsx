@@ -47,6 +47,9 @@ export default function BatchesPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [uploadCollectionId, setUploadCollectionId] = useState<string>("");
+  const [addingCollection, setAddingCollection] = useState(false);
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const [savingCollection, setSavingCollection] = useState(false);
   const [parsed, setParsed] = useState<ParsedBatch[] | null>(null);
   const [uploadStates, setUploadStates] = useState<Record<number, UploadState>>({});
   const [uploading, setUploading] = useState(false);
@@ -160,6 +163,37 @@ export default function BatchesPage() {
     [refresh]
   );
 
+  const createCollection = useCallback(
+    async (selectForUpload: boolean) => {
+      const name = newCollectionName.trim();
+      if (!name) return;
+      setSavingCollection(true);
+      try {
+        const res = await fetch("/api/collections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          window.alert(`Could not create collection: ${err.error ?? res.status}`);
+          return;
+        }
+        const created = (await res.json()) as Collection;
+        setCollections((prev) => {
+          if (prev.some((c) => c.id === created.id)) return prev;
+          return [...prev, created].sort((a, b) => a.name.localeCompare(b.name));
+        });
+        if (selectForUpload) setUploadCollectionId(created.id);
+        setNewCollectionName("");
+        setAddingCollection(false);
+      } finally {
+        setSavingCollection(false);
+      }
+    },
+    [newCollectionName]
+  );
+
   const setBatchCollection = useCallback(
     async (b: BatchWithCounts, collectionId: string) => {
       await fetch(`/api/batches/${b.id}`, {
@@ -220,6 +254,48 @@ export default function BatchesPage() {
         )}
       </div>
 
+      {addingCollection && (
+        <div className="mb-6 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3">
+          <span className="text-sm text-zinc-400">New collection</span>
+          <input
+            autoFocus
+            type="text"
+            value={newCollectionName}
+            onChange={(e) => setNewCollectionName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                createCollection(!!parsed);
+              }
+              if (e.key === "Escape") {
+                setAddingCollection(false);
+                setNewCollectionName("");
+              }
+            }}
+            placeholder="e.g. Adeline Feasley"
+            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 placeholder:text-zinc-600"
+          />
+          <button
+            type="button"
+            onClick={() => createCollection(!!parsed)}
+            disabled={savingCollection || !newCollectionName.trim()}
+            className="rounded bg-cyan-800 px-3 py-1 text-xs text-cyan-100 hover:bg-cyan-700 disabled:opacity-50"
+          >
+            {savingCollection ? "Adding…" : "Add"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAddingCollection(false);
+              setNewCollectionName("");
+            }}
+            className="text-xs text-zinc-500 hover:text-zinc-300"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       {/* upload zone */}
       <div className="mb-8 rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-6">
         {!parsed ? (
@@ -279,7 +355,7 @@ export default function BatchesPage() {
                     </div>
                   ))}
                 </div>
-                <label className="mt-4 flex items-center gap-2 text-sm text-zinc-400">
+                <label className="mt-4 flex flex-wrap items-center gap-2 text-sm text-zinc-400">
                   Collection
                   <select
                     value={uploadCollectionId}
@@ -293,6 +369,13 @@ export default function BatchesPage() {
                       </option>
                     ))}
                   </select>
+                  <button
+                    type="button"
+                    onClick={() => setAddingCollection(true)}
+                    className="text-xs text-cyan-400 hover:text-cyan-300"
+                  >
+                    + New
+                  </button>
                 </label>
                 <div className="mt-4 flex gap-3">
                   <button
@@ -354,7 +437,7 @@ export default function BatchesPage() {
                       : "cards not detected yet"}
                     {b.dpi ? ` · ${b.dpi} dpi` : ""}
                   </p>
-                  <label className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+                  <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                     Collection
                     <select
                       value={b.collection_id ?? ""}
@@ -369,6 +452,13 @@ export default function BatchesPage() {
                         </option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      onClick={() => setAddingCollection(true)}
+                      className="text-cyan-500 hover:text-cyan-300"
+                    >
+                      + New
+                    </button>
                   </label>
                   <div className="mt-3 flex items-center gap-2 text-sm">
                     {next.done ? (
