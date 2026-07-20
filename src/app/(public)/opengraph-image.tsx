@@ -36,7 +36,7 @@ export default async function Image() {
       src: await fetchCardImage(r.front_image, 420),
     }))
   );
-  const fan = resolved.filter((r): r is { id: string; src: string } => !!r.src).slice(0, 3);
+  const fan = resolved.filter((r): r is { id: string; src: string } => !!r.src).slice(0, 5);
   const center = (fan.length - 1) / 2;
   const cardW = 340;
   const cardH = Math.round((cardW * 3) / 5); // 5:3 fronts
@@ -117,14 +117,15 @@ export default async function Image() {
           {subtitle}
         </div>
 
-        {/* fanned deck of real card fronts */}
+        {/* fanned deck of real card fronts — laid out as in-flow flex items
+            (Satori drops images inside position:absolute + transform, so we
+            overlap with negative margins instead). */}
         <div
           style={{
             position: "absolute",
-            bottom: 6,
+            bottom: 8,
             left: 0,
             right: 0,
-            height: cardH + 120,
             display: "flex",
             alignItems: "flex-end",
             justifyContent: "center",
@@ -133,18 +134,17 @@ export default async function Image() {
           {fan.map((r, i) => {
             const offset = i - center;
             const angle = offset * 9;
-            const dx = offset * cardW * 0.58;
             // Outer cards ride higher so the whole hand fans up into frame.
             const dy = -Math.abs(offset) * Math.abs(offset) * 20;
             return (
               <div
                 key={r.id}
                 style={{
-                  position: "absolute",
                   display: "flex",
                   width: cardW,
                   height: cardH,
-                  transform: `translateX(${dx}px) translateY(${dy}px) rotate(${angle}deg)`,
+                  marginLeft: i === 0 ? 0 : -Math.round(cardW * 0.42),
+                  transform: `translateY(${dy}px) rotate(${angle}deg)`,
                   borderRadius: 12,
                   padding: 8,
                   background: OG_COLORS.paper,
@@ -152,15 +152,14 @@ export default async function Image() {
                   boxShadow: "0 26px 60px rgba(0,0,0,0.55)",
                 }}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={r.src}
                   alt=""
                   width={cardW - 16}
                   height={cardH - 16}
                   style={{
-                    width: "100%",
-                    height: "100%",
+                    width: cardW - 16,
+                    height: cardH - 16,
                     objectFit: "cover",
                     borderRadius: 6,
                   }}

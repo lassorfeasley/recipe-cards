@@ -152,7 +152,6 @@ export default async function Image({
                 transform: "rotate(-4deg)",
               }}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={frontImage}
                 alt=""
