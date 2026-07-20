@@ -8,11 +8,20 @@ export const revalidate = 120;
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const data = await getRecipeBySlug(slug);
-  if (!data) return { title: "Grandma's Recipe Cards" };
+  if (!data) return { title: "Recipe not found" };
+
+  const { title, attribution } = data.recipe;
+  const description = attribution
+    ? `A handwritten family recipe card for ${title}, from the kitchen of ${attribution}.`
+    : `A handwritten family recipe card for ${title}.`;
+
+  // The card front is showcased by the sibling `opengraph-image.tsx`; leaving
+  // `images` unset here lets that generated card become the og:image.
   return {
-    title: `${data.recipe.title} — Grandma's Recipe Cards`,
-    description: `A handwritten family recipe card: ${data.recipe.title}`,
-    openGraph: { images: [data.recipe.front_image] },
+    title,
+    description,
+    openGraph: { type: "article", title, description },
+    twitter: { title, description },
   };
 }
 

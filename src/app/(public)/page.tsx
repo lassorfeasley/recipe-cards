@@ -4,7 +4,7 @@ import { getPublishedRecipes } from "@/lib/publicData";
 export const revalidate = 120;
 
 export const metadata = {
-  title: "Grandma's Recipe Cards",
+  title: { absolute: "Grandma's Recipe Cards" },
   description: "A family archive of handwritten recipe cards.",
 };
 

@@ -106,11 +106,20 @@ function CardGrid({
   visCols,
   eager,
   hidden,
+  lite,
 }: {
   recipes: WallRecipe[];
   visCols: number | null;
   eager?: boolean;
   hidden?: boolean;
+  /**
+   * Mobile/low-power path: drop the per-card flip wave and render only the
+   * front face. The flip promotes every card to its own perspective()/rotateY()
+   * compositor layer — ~1600 of them across the tiled wall — which exhausts
+   * mobile GPU memory and crashes the tab. Front-only also halves the <img>
+   * count. The diagonal pan (two transforms total) still runs.
+   */
+  lite?: boolean;
 }) {
   const rows = Math.ceil(recipes.length / TILE_COLS);
   return (
@@ -154,49 +163,61 @@ function CardGrid({
             tabIndex={hidden ? -1 : undefined}
             className="group relative block aspect-[5/3] transition-transform duration-200 ease-out hover:z-10 hover:scale-[1.06] focus-visible:z-10 focus-visible:scale-[1.06]"
           >
-            {/*
-              Flattened 3D flip: one perspective() rotateY() transform per card,
-              with the faces cross-faded at the 90° points. True per-card
-              perspective + preserve-3d created 3D rendering contexts, which made
-              the GPU drop tiles (cards randomly rendered black).
-            */}
-            <div
-              className={`relative h-full w-full ${visCols ? "card-wave" : ""}`}
-              style={
-                visCols
-                  ? ({ "--wd": waveDelay(i, rows) } as React.CSSProperties)
-                  : undefined
-              }
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
+            {lite ? (
+              // Mobile/low-power: a single static front face. No per-card
+              // transform layer, no second image — just the pan.
+              /* eslint-disable-next-line @next/next/no-img-element */
               <img
                 src={r.thumb}
                 alt={hidden ? "" : r.title}
-                loading={!flipped && eager && i < 36 ? "eager" : "lazy"}
-                className={flipped ? faceBack : faceFront}
+                loading={eager && i < 24 ? "eager" : "lazy"}
+                className="absolute inset-0 h-full w-full rounded object-contain"
               />
-              {/* Real card back when we have one, otherwise a plain index
-                  card with the recipe's name. */}
-              {r.backThumb ? (
-                /* eslint-disable-next-line @next/next/no-img-element */
+            ) : (
+              /*
+                Flattened 3D flip: one perspective() rotateY() transform per card,
+                with the faces cross-faded at the 90° points. True per-card
+                perspective + preserve-3d created 3D rendering contexts, which made
+                the GPU drop tiles (cards randomly rendered black).
+              */
+              <div
+                className={`relative h-full w-full ${visCols ? "card-wave" : ""}`}
+                style={
+                  visCols
+                    ? ({ "--wd": waveDelay(i, rows) } as React.CSSProperties)
+                    : undefined
+                }
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={r.backThumb}
-                  alt=""
-                  loading={flipped && eager && i < 36 ? "eager" : "lazy"}
-                  className={flipped ? faceFront : faceBack}
+                  src={r.thumb}
+                  alt={hidden ? "" : r.title}
+                  loading={!flipped && eager && i < 36 ? "eager" : "lazy"}
+                  className={flipped ? faceBack : faceFront}
                 />
-              ) : (
-                <div
-                  className={`${
-                    flipped ? faceFront : faceBack
-                  } flex items-center justify-center border border-[#d8cdb0] bg-[#f3ecd7] px-2`}
-                >
-                  <span className="line-clamp-3 text-center font-serif text-[clamp(9px,0.85vw,15px)] leading-snug text-[#4a4234]">
-                    {r.title}
-                  </span>
-                </div>
-              )}
-            </div>
+                {/* Real card back when we have one, otherwise a plain index
+                    card with the recipe's name. */}
+                {r.backThumb ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={r.backThumb}
+                    alt=""
+                    loading={flipped && eager && i < 36 ? "eager" : "lazy"}
+                    className={flipped ? faceFront : faceBack}
+                  />
+                ) : (
+                  <div
+                    className={`${
+                      flipped ? faceFront : faceBack
+                    } flex items-center justify-center border border-[#d8cdb0] bg-[#f3ecd7] px-2`}
+                  >
+                    <span className="line-clamp-3 text-center font-serif text-[clamp(9px,0.85vw,15px)] leading-snug text-[#4a4234]">
+                      {r.title}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </Link>
         );
       })}
@@ -217,8 +238,27 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
   const [durY, setDurY] = useState<number | null>(null);
   const [durX, setDurX] = useState<number | null>(null);
   const [visCols, setVisCols] = useState<number | null>(null);
+  const [lite, setLite] = useState(false);
 
   const deck = useMemo(() => padDeck(recipes), [recipes]);
+
+  // Phones/tablets and low-memory or reduced-motion devices can't composite
+  // ~1600 per-card flip layers without crashing, so drop to the lite wall.
+  useEffect(() => {
+    const decide = () => {
+      const coarse = window.matchMedia("(pointer: coarse)").matches;
+      const small = window.innerWidth < 768;
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const lowMem =
+        typeof (navigator as Navigator & { deviceMemory?: number })
+          .deviceMemory === "number" &&
+        (navigator as Navigator & { deviceMemory?: number }).deviceMemory! <= 4;
+      setLite((coarse && small) || reduced || lowMem);
+    };
+    decide();
+    window.addEventListener("resize", decide);
+    return () => window.removeEventListener("resize", decide);
+  }, []);
 
   useEffect(() => {
     const root = container.current;
@@ -267,12 +307,12 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
           }
         >
           <div className="flex">
-            <CardGrid recipes={deck} visCols={visCols} eager />
-            <CardGrid recipes={deck} visCols={visCols} hidden />
+            <CardGrid recipes={deck} visCols={visCols} eager lite={lite} />
+            <CardGrid recipes={deck} visCols={visCols} hidden lite={lite} />
           </div>
           <div className="flex">
-            <CardGrid recipes={deck} visCols={visCols} hidden />
-            <CardGrid recipes={deck} visCols={visCols} hidden />
+            <CardGrid recipes={deck} visCols={visCols} hidden lite={lite} />
+            <CardGrid recipes={deck} visCols={visCols} hidden lite={lite} />
           </div>
         </div>
       </div>

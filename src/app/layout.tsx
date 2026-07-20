@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { getSiteUrl } from "@/lib/og";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,26 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Recipe Card Archive",
-  description: "Digitizing Grandma's recipe cards",
+  metadataBase: new URL(getSiteUrl()),
+  title: {
+    default: "Grandma's Recipe Cards",
+    template: "%s — Grandma's Recipe Cards",
+  },
+  description:
+    "A family archive of handwritten recipe cards, lovingly digitized.",
+  openGraph: {
+    type: "website",
+    siteName: "Grandma's Recipe Cards",
+    title: "Grandma's Recipe Cards",
+    description:
+      "A family archive of handwritten recipe cards, lovingly digitized.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Grandma's Recipe Cards",
+    description:
+      "A family archive of handwritten recipe cards, lovingly digitized.",
+  },
 };
 
 export default function RootLayout({
