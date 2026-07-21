@@ -26,6 +26,9 @@ export default async function IndexPage() {
     attribution: r.attribution,
     ingredients: r.ingredients,
     collection: r.collection,
+    // Total time estimate (active + passive), in minutes; feeds the
+    // time-to-cook filter. Often an AI estimate, sometimes absent.
+    totalMinutes: r.recipe_structured?.total_minutes ?? null,
   }));
 
   return (

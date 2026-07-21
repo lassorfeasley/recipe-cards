@@ -12,10 +12,59 @@ export interface IndexEntry {
   ingredients: string[] | null;
   /** Owner / physical recipe box this card came from, e.g. "Phebe Butler". */
   collection: string | null;
+  /** Estimated total time in minutes (active + passive). Null when unknown. */
+  totalMinutes: number | null;
+}
+
+/**
+ * Time-to-cook buckets for the advanced filter. Each `test` is applied to a
+ * recipe's `totalMinutes`; cards with no time estimate match no bucket and so
+ * only show when the time filter is "Any".
+ */
+const TIME_RANGES: { id: string; label: string; test: (m: number) => boolean }[] = [
+  { id: "quick", label: "Under 30 min", test: (m) => m <= 30 },
+  { id: "medium", label: "30–60 min", test: (m) => m > 30 && m <= 60 },
+  { id: "long", label: "1–2 hours", test: (m) => m > 60 && m <= 120 },
+  { id: "epic", label: "Over 2 hours", test: (m) => m > 120 },
+];
+
+/** Title-case a lowercase category tag for display, e.g. "dessert" → "Dessert". */
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** A bordered toggle chip used in the advanced-filters panel. */
+function FilterPill({
+  active,
+  onClick,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex items-center gap-1.5 whitespace-nowrap border px-3 py-1.5 text-xs transition-colors ${
+        active
+          ? "border-zinc-100 bg-zinc-100 font-medium text-zinc-900"
+          : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
+      }`}
+    >
+      {label}
+      {count != null && (
+        <span className={active ? "text-zinc-500" : "text-zinc-600"}>{count}</span>
+      )}
+    </button>
+  );
 }
 
 /** Collapsed strip height, in px. */
 const MIN_H = 60;
+/** Max card width, in px — cards never grow wider than a real index card. */
+const CARD_MAX_W = 575;
 /** Spacing of the blue ruled lines in the card body (23px gap + 1px line). */
 const RULE_SPACING = 24;
 /**
@@ -27,16 +76,16 @@ const MAX_H = MIN_H + Math.round(2.5 * RULE_SPACING);
 /** Distance (px) from the focus line over which a card decays back to a strip.
     Tuned down with the smaller expanded height so the open/close still reads. */
 const FALLOFF = 160;
-/** Desktop viewport y of the focus line — the top of the list, so card 1 opens at rest. */
-const FOCUS_TOP_DESKTOP = 126;
 /**
- * Desktop viewport y where cards pin — the top card's resting position on load
- * (the container's pt-24). Cards are sticky, so instead of scrolling off the
- * top they stop at the stack and the cards after them slide up and pile on
- * top (later DOM order paints above). On mobile both lines are derived from
- * the measured fixed-header height instead.
+ * Fallback pin line used only for the first paint before the top nav's height
+ * is measured. Once measured, both the stack and focus lines are derived from
+ * the real nav height. Cards are sticky, so instead of scrolling off the top
+ * they stop at the stack line and later cards slide up and pile on top (later
+ * DOM order paints above).
  */
-const STACK_TOP_DESKTOP = FOCUS_TOP_DESKTOP - MIN_H / 2;
+const STACK_TOP_DESKTOP = 96;
+/** Breathing room between the header bottom and where the top card pins, in px. */
+const STACK_GAP = 40;
 /** Vertical offset between successive cards in the pile, in px. */
 const STAGGER = 3;
 /**
@@ -50,9 +99,11 @@ const STACK_VISIBLE = 20;
 /** Cap on simultaneous fly-out clones — beyond this the rest just vanish. */
 const MAX_FLYERS = 24;
 
-/** A filtered-out card mid-flight: a fixed-position clone of its last frame. */
+/** A card mid-flight: a fixed-position clone. "out" cards were just filtered
+    away and sail off the sides; "in" cards were just added and sail back on. */
 interface FlyingCard {
   key: string;
+  id: string;
   title: string;
   category: string | null;
   top: number;
@@ -61,6 +112,7 @@ interface FlyingCard {
   height: number;
   dir: -1 | 1;
   delay: number;
+  mode: "out" | "in";
 }
 
 /**
@@ -71,17 +123,21 @@ interface FlyingCard {
  */
 export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const [query, setQuery] = useState("");
-  const [categories, setCategories] = useState<Set<string>>(new Set());
+  // Selected category; null = every category. Single-select combo box.
+  const [category, setCategory] = useState<string | null>(null);
   // Selected owner (recipe box); null = show every owner's cards.
   const [owner, setOwner] = useState<string | null>(null);
+  // Selected time-to-cook bucket id (see TIME_RANGES); null = any duration.
+  const [timeRange, setTimeRange] = useState<string | null>(null);
+  // Whether the advanced-filters panel is expanded below the top row.
+  const [showFilters, setShowFilters] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
-  // Height of the fixed mobile header; 0 on desktop where it's display:none.
+  // Measured height of the fixed top nav — the card-pile geometry is derived
+  // from it (position:fixed, since sticky is unreliable in iOS Safari when the
+  // URL bar collapses mid-scroll).
   const [headerH, setHeaderH] = useState(0);
 
-  // The mobile header is position:fixed (sticky is unreliable in iOS Safari
-  // when the URL bar collapses), so the card-pile geometry must be derived
-  // from its real rendered height.
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -96,14 +152,28 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     };
   }, []);
 
-  const stackTop = headerH > 0 ? headerH + 8 : STACK_TOP_DESKTOP;
+  const stackTop = headerH > 0 ? headerH + STACK_GAP : STACK_TOP_DESKTOP + STACK_GAP;
   const focusTop = stackTop + MIN_H / 2;
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const [flying, setFlying] = useState<FlyingCard[]>([]);
+  // Ids of cards currently sailing back in: the real row is held invisible at
+  // its landing spot until its clone lands, so the entrance isn't doubled.
+  const [flyingInIds, setFlyingInIds] = useState<Set<string>>(new Set());
   // Last known viewport rects of visible cards, captured synchronously in the
   // filter handlers — by the time React re-renders, the DOM nodes are gone.
   const lastRects = useRef<Map<string, DOMRect>>(new Map());
+  // Pending safety-sweep timers, one per fly batch. animationend is the fast
+  // path for cleanup, but during rapid filter changes React drops enough of
+  // those events that clones (and the invisible real rows they mask) leak —
+  // these timers guarantee every batch is torn down. Cleared on unmount.
+  const flightTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  useEffect(
+    () => () => {
+      for (const t of flightTimers.current) clearTimeout(t);
+      flightTimers.current.clear();
+    },
+    []
+  );
 
   // Owners present in the data, with their card counts. The toggle only
   // appears when there's more than one box to switch between.
@@ -126,11 +196,29 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [entries, owner]);
 
+  // Card counts per time bucket, scoped to the selected owner (matching how
+  // categoryCounts is scoped) so the panel shows how many recipes each range
+  // would surface.
+  const timeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of entries) {
+      if (owner && (e.collection ?? null) !== owner) continue;
+      if (e.totalMinutes == null) continue;
+      const r = TIME_RANGES.find((rr) => rr.test(e.totalMinutes!));
+      if (r) counts.set(r.id, (counts.get(r.id) ?? 0) + 1);
+    }
+    return counts;
+  }, [entries, owner]);
+
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const range = timeRange ? TIME_RANGES.find((r) => r.id === timeRange) : null;
     return entries.filter((e) => {
       if (owner && (e.collection ?? null) !== owner) return false;
-      if (categories.size > 0 && !categories.has(e.category ?? "uncategorized")) return false;
+      if (category && (e.category ?? "uncategorized") !== category) return false;
+      if (range) {
+        if (e.totalMinutes == null || !range.test(e.totalMinutes)) return false;
+      }
       if (!q) return true;
       return (
         e.title.toLowerCase().includes(q) ||
@@ -138,7 +226,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         (e.ingredients ?? []).some((ing) => ing.includes(q))
       );
     });
-  }, [entries, query, categories, owner]);
+  }, [entries, query, category, owner, timeRange]);
 
   /** Snapshot the on-screen position of every visible card, keyed by id.
       The list renders one <a> per match in order, so pair them by index. */
@@ -179,10 +267,11 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       // rather than the partial peek — it's the end of the road, and the
       // h-screen spacer below gives it the room. Clamped so it still fits
       // under the stack line on short viewports.
+      const cardW = Math.min(list.clientWidth, CARD_MAX_W);
       const lastMaxH = Math.max(
         maxH,
         Math.min(
-          Math.round(list.clientWidth * (3 / 5)),
+          Math.round(cardW * (3 / 5)),
           window.innerHeight - stackTop - 24
         )
       );
@@ -267,7 +356,78 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     };
   }, [matches, stackTop, focusTop]);
 
-  // Spawn fly-out clones for cards that just left the match list. prev is
+  // Mobile pinch-to-zoom preview: two-finger pinch scales the whole list
+  // between 0.5× and 1.5×, anchored at the pinch midpoint, then springs
+  // elastically back to 1× the moment a finger lifts. Purely transient —
+  // written straight to the DOM so the gesture never triggers a React
+  // re-render, and it always resets, so it can't corrupt the scroll-driven
+  // layout below it.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+
+    /** Min/max scale: ±50% from the 1× default. */
+    const MIN_SCALE = 0.5;
+    const MAX_SCALE = 1.5;
+    let startDist = 0;
+    let active = false;
+
+    const dist = (t: TouchList) =>
+      Math.hypot(
+        t[0].clientX - t[1].clientX,
+        t[0].clientY - t[1].clientY
+      );
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      active = true;
+      startDist = dist(e.touches) || 1;
+      const rect = el.getBoundingClientRect();
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      // Anchor the zoom under the fingers so it grows/shrinks in place.
+      el.style.transformOrigin = `${midX - rect.left}px ${midY - rect.top}px`;
+      el.style.transition = "none";
+      el.style.willChange = "transform";
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (!active || e.touches.length !== 2) return;
+      // Stop the browser's own page zoom so ours is the only one.
+      e.preventDefault();
+      const raw = dist(e.touches) / startDist;
+      const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, raw));
+      el.style.transform = `scale(${scale})`;
+    };
+
+    const end = () => {
+      if (!active) return;
+      active = false;
+      // Elastic snap home: an overshooting curve gives the springy rebound.
+      el.style.transition = "transform 480ms cubic-bezier(0.22, 1.35, 0.4, 1)";
+      el.style.transform = "scale(1)";
+    };
+
+    const clearWillChange = (e: TransitionEvent) => {
+      if (e.propertyName === "transform" && !active) el.style.willChange = "";
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: false });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    el.addEventListener("transitionend", clearWillChange);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", end);
+      el.removeEventListener("touchcancel", end);
+      el.removeEventListener("transitionend", clearWillChange);
+    };
+  }, []);
+
+  // Spawn fly clones on every match-set change: cards that just left sail off
+  // the sides ("out"), cards that just arrived sail back on ("in"). prev is
   // tracked in a ref so this runs once per matches change.
   const prevMatches = useRef(matches);
   const flightSeq = useRef(0);
@@ -275,44 +435,117 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     const prev = prevMatches.current;
     prevMatches.current = matches;
     if (prev === matches) return;
+    const prevIds = new Set(prev.map((m) => m.id));
     const nextIds = new Set(matches.map((m) => m.id));
+
     const removed = prev
       .filter((e) => !nextIds.has(e.id) && lastRects.current.has(e.id))
       .map((e) => ({ entry: e, rect: lastRects.current.get(e.id)! }))
       .sort((a, b) => a.rect.top - b.rect.top)
       .slice(0, MAX_FLYERS);
-    if (removed.length === 0) return;
+
+    // Landing spots for newly added cards are read straight from the freshly
+    // committed DOM — one <a> per match, in order — and only those on screen
+    // are worth animating in.
+    const list = listRef.current;
+    const anchors = list
+      ? (Array.from(list.children).filter((el) => el.tagName === "A") as HTMLElement[])
+      : [];
+    const added: { entry: IndexEntry; rect: DOMRect }[] = [];
+    for (let i = 0; i < anchors.length && i < matches.length; i++) {
+      if (prevIds.has(matches[i].id)) continue;
+      const rect = anchors[i].getBoundingClientRect();
+      if (rect.bottom > 0 && rect.top < window.innerHeight) {
+        added.push({ entry: matches[i], rect });
+      }
+    }
+    const addedCapped = added.slice(0, MAX_FLYERS);
+
+    if (removed.length === 0 && addedCapped.length === 0) return;
     const stamp = ++flightSeq.current;
-    setFlying((f) => [
-      ...f,
-      ...removed.map(({ entry, rect }, i) => ({
-        key: `${entry.id}-${stamp}`,
-        title: entry.title,
-        category: entry.category,
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height,
-        dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
-        delay: i * 25,
-      })),
-    ]);
+
+    const outFlyers: FlyingCard[] = removed.map(({ entry, rect }, i) => ({
+      key: `${entry.id}-out-${stamp}`,
+      id: entry.id,
+      title: entry.title,
+      category: entry.category,
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      // Fly at full 3×5 proportions, not the collapsed strip height — a
+      // sliver flying off looks decapitated; we want the whole card to sail.
+      height: Math.max(rect.height, Math.round(rect.width * (3 / 5))),
+      dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
+      delay: i * 25,
+      mode: "out" as const,
+    }));
+    const inFlyers: FlyingCard[] = addedCapped.map(({ entry, rect }, i) => ({
+      key: `${entry.id}-in-${stamp}`,
+      id: entry.id,
+      title: entry.title,
+      category: entry.category,
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: Math.max(rect.height, Math.round(rect.width * (3 / 5))),
+      dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
+      delay: i * 25,
+      mode: "in" as const,
+    }));
+
+    if (inFlyers.length > 0) {
+      setFlyingInIds((prevSet) => {
+        const next = new Set(prevSet);
+        for (const f of inFlyers) next.add(f.id);
+        return next;
+      });
+    }
+    setFlying((f) => [...f, ...outFlyers, ...inFlyers]);
+
+    // Guaranteed teardown for this batch. animationend (below) removes each
+    // clone the instant it lands, but that event is unreliable when filter
+    // changes stack up fast — without this sweep, orphaned clones pile up and
+    // the real rows they mask stay visibility:hidden (invisible, unclickable).
+    // Fire just past the slowest clone's window: 450ms anim + its stagger.
+    const batchKeys = new Set([...outFlyers, ...inFlyers].map((f) => f.key));
+    const inIds = inFlyers.map((f) => f.id);
+    const maxDelay = Math.max(
+      0,
+      ...outFlyers.map((f) => f.delay),
+      ...inFlyers.map((f) => f.delay)
+    );
+    const timer = setTimeout(() => {
+      flightTimers.current.delete(timer);
+      setFlying((cur) => cur.filter((x) => !batchKeys.has(x.key)));
+      if (inIds.length > 0) {
+        setFlyingInIds((prevSet) => {
+          if (inIds.every((id) => !prevSet.has(id))) return prevSet;
+          const next = new Set(prevSet);
+          for (const id of inIds) next.delete(id);
+          return next;
+        });
+      }
+    }, 450 + maxDelay + 250);
+    flightTimers.current.add(timer);
   }, [matches]);
 
-  const toggleCategory = (c: string) => {
+  const selectCategory = (value: string | null) => {
+    if (value === category) return;
     captureRects();
-    setCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(c)) next.delete(c);
-      else next.add(c);
-      return next;
-    });
+    setCategory(value);
+  };
+
+  const selectTimeRange = (value: string | null) => {
+    if (value === timeRange) return;
+    captureRects();
+    setTimeRange(value);
   };
 
   const clearFilters = () => {
     captureRects();
     setQuery("");
-    setCategories(new Set());
+    setCategory(null);
+    setTimeRange(null);
   };
 
   const selectOwner = (value: string | null) => {
@@ -321,85 +554,155 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     setOwner(value);
   };
 
-  const filtered = query.trim() !== "" || categories.size > 0;
+  const filtered = query.trim() !== "" || category !== null || timeRange !== null;
+  // Active filters living inside the advanced panel — drives the button badge.
+  const advancedCount = (category !== null ? 1 : 0) + (timeRange !== null ? 1 : 0);
+
+  // Count shown in "N of M cards": M is scoped to the selected owner.
+  const ownerTotal = owner
+    ? (owners.find(([name]) => name === owner)?.[1] ?? entries.length)
+    : entries.length;
+
+  const clearInline = filtered ? (
+    <>
+      {" · "}
+      <button
+        onClick={clearFilters}
+        className="text-zinc-300 underline underline-offset-2 hover:text-white"
+      >
+        clear
+      </button>
+    </>
+  ) : null;
 
   const ownerToggle =
     owners.length >= 2 ? (
-      <div className="flex divide-x divide-zinc-700 border border-zinc-700 md:flex-col md:divide-x-0 md:divide-y">
-        {[{ label: "All", value: null as string | null }, ...owners.map(([name]) => ({ label: name, value: name as string | null }))].map(
-          ({ label, value }) => {
-            const active = owner === value;
-            return (
-              <button
-                key={label}
-                onClick={() => selectOwner(value)}
-                aria-pressed={active}
-                className={`min-w-0 flex-1 truncate px-2.5 py-1.5 text-center text-xs transition-colors md:text-left ${
-                  active
-                    ? "bg-zinc-100 font-medium text-zinc-900"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-                }`}
-              >
-                {label}
-              </button>
-            );
-          }
-        )}
+      <div className="flex shrink-0 divide-x divide-zinc-700 border border-zinc-700">
+        {[
+          { label: "All", value: null as string | null },
+          ...owners.map(([name]) => ({ label: name, value: name as string | null })),
+        ].map(({ label, value }) => {
+          const active = owner === value;
+          return (
+            <button
+              key={label}
+              onClick={() => selectOwner(value)}
+              aria-pressed={active}
+              className={`flex-1 whitespace-nowrap px-3 py-1.5 text-center text-xs transition-colors ${
+                active
+                  ? "bg-zinc-100 font-medium text-zinc-900"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
     ) : null;
 
-  const categoryChips = (
-    <div className="flex flex-wrap gap-1.5 md:flex-col md:gap-1">
-      {categoryCounts.map(([c, n]) => {
-        const active = categories.has(c);
-        return (
-          <button
-            key={c}
-            onClick={() => toggleCategory(c)}
-            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm transition-colors ${
-              active
-                ? "bg-zinc-100 text-zinc-900"
-                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-            }`}
-          >
-            <span className="capitalize">{c}</span>
-            <span className={active ? "text-zinc-500" : "text-zinc-600"}>{n}</span>
-          </button>
-        );
-      })}
-    </div>
+  const filtersButton = (
+    <button
+      onClick={() => setShowFilters((v) => !v)}
+      aria-expanded={showFilters}
+      className={`flex h-9 shrink-0 items-center gap-1.5 border px-3 text-sm transition-colors ${
+        showFilters || advancedCount > 0
+          ? "border-zinc-400 text-zinc-100"
+          : "border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white"
+      }`}
+    >
+      Filters
+      {advancedCount > 0 && (
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-100 px-1 text-[10px] font-semibold text-zinc-900">
+          {advancedCount}
+        </span>
+      )}
+      <svg
+        viewBox="0 0 12 12"
+        aria-hidden
+        className={`h-3 w-3 transition-transform ${showFilters ? "rotate-180" : ""}`}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      >
+        <path d="M2.5 4.5 6 8l3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
   );
 
-  return (
-    <div className="mx-auto flex max-w-5xl flex-col md:flex-row md:gap-10 px-4 md:pt-24">
-      {/* Mobile: fixed search/filter bar. position:fixed (not sticky) so iOS
-          Safari can't detach it while the URL bar collapses mid-scroll. The
-          card pile pins just below its measured height. The category panel
-          drops over the list from the bar's bottom edge. */}
-      <div
-        ref={headerRef}
-        className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur md:hidden"
-      >
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-[10px] font-medium uppercase tracking-[0.35em] text-zinc-500">
-            Recipe Index
-          </h1>
-          <p className="text-xs text-zinc-500">
-            {matches.length} of {entries.length}
-            {filtered && (
-              <>
-                {" · "}
-                <button
-                  onClick={clearFilters}
-                  className="text-zinc-300 underline underline-offset-2 hover:text-white"
-                >
-                  clear
-                </button>
-              </>
-            )}
-          </p>
+  const filtersPanel = showFilters ? (
+    <div className="mx-auto mt-3 flex max-w-5xl flex-col gap-3 border-t border-zinc-800/80 px-4 pt-3">
+      <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:gap-3">
+        <span className="w-24 shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
+          Meal type
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          <FilterPill active={category === null} onClick={() => selectCategory(null)} label="All" />
+          {categoryCounts.map(([c, n]) => (
+            <FilterPill
+              key={c}
+              active={category === c}
+              onClick={() => selectCategory(c)}
+              label={cap(c)}
+              count={n}
+            />
+          ))}
         </div>
-        <div className="mt-2 flex gap-2">
+      </div>
+
+      <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:gap-3">
+        <span className="w-24 shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
+          Time to cook
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          <FilterPill active={timeRange === null} onClick={() => selectTimeRange(null)} label="Any" />
+          {TIME_RANGES.map((r) => (
+            <FilterPill
+              key={r.id}
+              active={timeRange === r.id}
+              onClick={() => selectTimeRange(r.id)}
+              label={r.label}
+              count={timeCounts.get(r.id) ?? 0}
+            />
+          ))}
+        </div>
+      </div>
+
+      {advancedCount > 0 && (
+        <div>
+          <button
+            onClick={clearFilters}
+            className="text-xs text-zinc-400 underline underline-offset-2 hover:text-white"
+          >
+            Reset filters
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  return (
+    <div className="mx-auto max-w-5xl px-4">
+      {/* Full-width top nav. position:fixed (not sticky) so iOS Safari can't
+          detach it while the URL bar collapses mid-scroll; the card pile pins
+          just below its measured height on every breakpoint. */}
+      <nav
+        ref={headerRef}
+        className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 pb-3 pt-[max(0.6rem,env(safe-area-inset-top))] backdrop-blur"
+      >
+        <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 md:flex-row md:flex-wrap md:items-center md:gap-3">
+          {/* title + (mobile-only) count; on desktop the wrapper flattens so
+              the title sits inline with the controls */}
+          <div className="flex items-center justify-between gap-3 md:contents">
+            <h1 className="whitespace-nowrap text-[10px] font-medium uppercase tracking-[0.35em] text-zinc-500 md:text-xs">
+              Recipe Index
+            </h1>
+            <p className="text-xs text-zinc-500 md:hidden">
+              {matches.length} of {ownerTotal}
+              {clearInline}
+            </p>
+          </div>
+
           <input
             type="search"
             value={query}
@@ -408,93 +711,19 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
               setQuery(e.target.value);
             }}
             placeholder="Search recipes…"
-            className="h-10 min-w-0 flex-1 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400"
+            className="h-9 min-w-0 flex-1 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400 md:min-w-[14rem] md:text-sm"
           />
-          <button
-            onClick={() => setFiltersOpen((v) => !v)}
-            aria-expanded={filtersOpen}
-            className={`flex h-10 shrink-0 items-center gap-1.5 border px-3 text-sm transition-colors ${
-              filtersOpen || categories.size > 0
-                ? "border-zinc-100 bg-zinc-100 text-zinc-900"
-                : "border-zinc-700 bg-zinc-900 text-zinc-300"
-            }`}
-          >
-            Filter
-            {categories.size > 0 && (
-              <span className="text-xs">· {categories.size}</span>
-            )}
-          </button>
-        </div>
-        {ownerToggle && <div className="mt-2">{ownerToggle}</div>}
-        {filtersOpen && (
-          <div className="absolute inset-x-0 top-full max-h-[60vh] overflow-y-auto border-b border-zinc-800 bg-zinc-950/95 px-4 pb-4 pt-3 backdrop-blur">
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
-              Category
-            </p>
-            {categoryChips}
-            <div className="mt-3 flex justify-end">
-              <button
-                onClick={() => setFiltersOpen(false)}
-                className="border border-zinc-700 px-4 py-1.5 text-sm text-zinc-300 hover:bg-zinc-900"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
 
-      {/* Desktop: sidebar on the dark background */}
-      <aside className="hidden shrink-0 md:sticky md:top-24 md:block md:h-fit md:w-56">
-        <h1 className="text-xs font-medium uppercase tracking-[0.35em] text-zinc-500">
-          Recipe Index
-        </h1>
+          {ownerToggle}
+          {filtersButton}
 
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => {
-            captureRects();
-            setQuery(e.target.value);
-          }}
-          placeholder="Search recipes…"
-          className="mt-5 w-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400"
-        />
-        <p className="mt-2 text-xs text-zinc-500">
-          Searches titles, attributions & ingredients
-        </p>
-
-        {ownerToggle && (
-          <div className="mt-7">
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
-              Owner
-            </p>
-            {ownerToggle}
-          </div>
-        )}
-
-        <div className="mt-7">
-          <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
-            Category
+          <p className="hidden shrink-0 whitespace-nowrap text-xs text-zinc-500 md:block">
+            {matches.length} of {ownerTotal} cards
+            {clearInline}
           </p>
-          {categoryChips}
         </div>
-
-        <p className="mt-7 text-xs text-zinc-500">
-          {matches.length} of {entries.length} cards
-          {filtered && (
-            <>
-              {" · "}
-              <button
-                onClick={clearFilters}
-                className="text-zinc-300 underline underline-offset-2 hover:text-white"
-              >
-                clear
-              </button>
-            </>
-          )}
-        </p>
-      </aside>
+        {filtersPanel}
+      </nav>
 
       {/* the list. The end-of-scroll room must be a real child of this div
           (not padding — sticky containment only spans the content box), so
@@ -503,8 +732,12 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
           pushed up off the viewport. */}
       <div
         ref={listRef}
-        className="flex min-w-0 flex-1 flex-col md:pt-0"
-        style={{ paddingTop: headerH > 0 ? headerH + 12 : undefined }}
+        className="flex min-w-0 flex-col"
+        style={{
+          paddingTop: (headerH > 0 ? headerH : STACK_TOP_DESKTOP) + STACK_GAP + 4,
+          // Let single-finger scroll pass through while we own pinch gestures.
+          touchAction: "pan-y",
+        }}
       >
         {matches.length === 0 ? (
           <p className="pt-8 text-sm text-zinc-500">No recipes match.</p>
@@ -513,8 +746,12 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             <Link
               key={r.id}
               href={`/card/${r.slug}`}
-              className="sticky block shrink-0 overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)] outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-white"
-              style={{ height: MIN_H, top: stackTop }}
+              className="sticky block w-full max-w-[575px] shrink-0 self-center overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)] outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-white"
+              style={{
+                height: MIN_H,
+                top: stackTop,
+                visibility: flyingInIds.has(r.id) ? "hidden" : undefined,
+              }}
             >
               <span
                 className="flex items-center justify-between gap-4"
@@ -556,9 +793,16 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
           {flying.map((f) => (
             <div
               key={f.key}
-              onAnimationEnd={() =>
-                setFlying((cur) => cur.filter((x) => x.key !== f.key))
-              }
+              onAnimationEnd={() => {
+                setFlying((cur) => cur.filter((x) => x.key !== f.key));
+                if (f.mode === "in") {
+                  setFlyingInIds((prevSet) => {
+                    const next = new Set(prevSet);
+                    next.delete(f.id);
+                    return next;
+                  });
+                }
+              }}
               className="index-card-fly absolute overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
               style={{
                 top: f.top,
@@ -566,7 +810,16 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                 width: f.width,
                 height: f.height,
                 animationName:
-                  f.dir < 0 ? "index-card-fly-left" : "index-card-fly-right",
+                  f.mode === "in"
+                    ? f.dir < 0
+                      ? "index-card-flyin-left"
+                      : "index-card-flyin-right"
+                    : f.dir < 0
+                      ? "index-card-fly-left"
+                      : "index-card-fly-right",
+                // Exits accelerate off (class default); entrances decelerate in.
+                animationTimingFunction:
+                  f.mode === "in" ? "cubic-bezier(0.16, 1, 0.3, 1)" : undefined,
                 animationDelay: `${f.delay}ms`,
               }}
             >

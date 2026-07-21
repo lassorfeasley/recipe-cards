@@ -130,6 +130,24 @@ body {
     transform: translate3d(130vw, -3vh, 0) rotate(8deg);
   }
 }
+/* Reverse: a re-added card sails back on from off the side and settles into
+   its landing spot (the clone is positioned at the destination). */
+@keyframes index-card-flyin-left {
+  from {
+    transform: translate3d(-130vw, -3vh, 0) rotate(-8deg);
+  }
+  to {
+    transform: translate3d(0, 0, 0) rotate(0);
+  }
+}
+@keyframes index-card-flyin-right {
+  from {
+    transform: translate3d(130vw, -3vh, 0) rotate(8deg);
+  }
+  to {
+    transform: translate3d(0, 0, 0) rotate(0);
+  }
+}
 .index-card-fly {
   animation-duration: 0.45s;
   animation-timing-function: cubic-bezier(0.5, 0, 1, 1);
