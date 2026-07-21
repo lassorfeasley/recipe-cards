@@ -11,6 +11,13 @@ body {
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
+/* Handwriting face for recipe-card titles (wall placeholders, the index list,
+   card detail, and print). --font-card is provided by next/font in the root
+   layout and already carries its own metric-matched fallback. */
+.font-card {
+  font-family: var(--font-card), "Segoe Script", "Bradley Hand", cursive;
+}
+
 /* Infinite diagonal pan for the showcase wall, composed from two independent
    seamless loops on the 2×2-tiled block. pan-y slides the content down by
    exactly one grid copy per cycle; pan-x slides it left by exactly one tile

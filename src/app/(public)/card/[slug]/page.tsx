@@ -66,7 +66,7 @@ export default async function RecipePage({ params }: { params: Promise<{ slug: s
         recipe={recipe}
         header={
           <header className="mb-10 text-center lg:mb-0 lg:text-left">
-            <h1 className="font-serif text-3xl text-amber-50 sm:text-4xl">{recipe.title}</h1>
+            <h1 className="font-card text-3xl text-amber-50 sm:text-4xl">{recipe.title}</h1>
             <p className="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs uppercase tracking-[0.25em] text-zinc-500 lg:justify-start">
               {recipe.category && <span>{recipe.category}</span>}
               {structured?.total_minutes != null && (

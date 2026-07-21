@@ -27,7 +27,7 @@ export default async function PrintPage({ params }: { params: Promise<{ slug: st
 
       <main className="mx-auto max-w-[46rem] px-8 py-12 print:max-w-none print:px-0 print:py-0">
         <header className="border-b border-zinc-300 pb-5">
-          <h1 className="font-serif text-3xl">{recipe.title}</h1>
+          <h1 className="font-card text-3xl">{recipe.title}</h1>
           <p className="mt-2 text-xs uppercase tracking-[0.25em] text-zinc-500">
             {recipe.category && <span>{recipe.category}</span>}
             {recipe.category && recipe.attribution && <span> · </span>}

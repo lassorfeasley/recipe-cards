@@ -92,6 +92,34 @@ function startsFlipped(id: string): boolean {
   return (h & 1) === 1;
 }
 
+/** Max card tilt, in degrees (± this). */
+const TILT_DEG = 2;
+/** Max per-card offset, in px (± this on each axis) — jitters the spacing. */
+const NUDGE_PX = 5;
+
+/**
+ * Deterministic "hand-placed" jitter per card: a small rotation and a sub-cell
+ * nudge, derived from the id hash so the server/client render and all four
+ * tiled copies agree (identical ids → identical jitter, so the tiling seams
+ * stay seamless). Uses the CSS `rotate`/`translate` individual properties so it
+ * layers on top of the hover `scale` and the flip-wave `transform` without
+ * either overriding the other. The nudge only shifts the card within its fixed
+ * grid cell, so track sizes — and thus the pan measurements — are untouched.
+ */
+function cardJitter(id: string): { rotate: string; translate: string } {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  const rand = (salt: number) =>
+    ((Math.imul(h ^ salt, 2654435761) >>> 0) % 1000) / 1000; // [0,1)
+  const rot = (rand(0x9e3779b9) * 2 - 1) * TILT_DEG;
+  const tx = (rand(0x85ebca6b) * 2 - 1) * NUDGE_PX;
+  const ty = (rand(0xc2b2ae35) * 2 - 1) * NUDGE_PX;
+  return {
+    rotate: `${rot.toFixed(2)}deg`,
+    translate: `${tx.toFixed(1)}px ${ty.toFixed(1)}px`,
+  };
+}
+
 /** Viewport columns per Tailwind breakpoint (sm/md/lg/xl). */
 function visibleCols(viewportWidth: number): number {
   if (viewportWidth >= 1280) return 9;
@@ -151,6 +179,7 @@ function CardGrid({
         // backs at all times. face-front is visible at rest; face-back is
         // pre-mirrored so it reads correctly while the parent is rotated 180°.
         const flipped = startsFlipped(r.id);
+        const jitter = cardJitter(r.id);
         const faceFront =
           "face-front absolute inset-0 h-full w-full rounded object-contain transition-shadow duration-200 group-hover:shadow-[0_8px_40px_rgba(255,220,150,0.15)]";
         const faceBack =
@@ -162,6 +191,7 @@ function CardGrid({
             title={r.title}
             tabIndex={hidden ? -1 : undefined}
             className="group relative block aspect-[5/3] transition-transform duration-200 ease-out hover:z-10 hover:scale-[1.06] focus-visible:z-10 focus-visible:scale-[1.06]"
+            style={{ rotate: jitter.rotate, translate: jitter.translate }}
           >
             {lite ? (
               // Mobile/low-power: a single static front face. No per-card
@@ -211,7 +241,7 @@ function CardGrid({
                       flipped ? faceFront : faceBack
                     } flex items-center justify-center border border-[#d8cdb0] bg-[#f3ecd7] px-2`}
                   >
-                    <span className="line-clamp-3 text-center font-serif text-[clamp(9px,0.85vw,15px)] leading-snug text-[#4a4234]">
+                    <span className="font-card line-clamp-3 text-center text-[clamp(9px,0.85vw,15px)] leading-snug text-[#4a4234]">
                       {r.title}
                     </span>
                   </div>
@@ -301,12 +331,18 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
       dragMoved.current = 0;
       vel.current = { x: 0, y: 0 };
       const pointerId = e.pointerId;
+      const target = e.currentTarget as HTMLElement;
       let lastX = e.clientX;
       let lastY = e.clientY;
       let lastT = performance.now();
-      let dragging = manualRef.current;
-      // Capture so moves keep firing even if the finger leaves the element.
-      (e.currentTarget as HTMLElement).setPointerCapture?.(pointerId);
+      // Have we started actually panning this gesture? Starts false even when
+      // already in manual mode, so a tap (no movement) never captures the
+      // pointer — pointer capture retargets the follow-up click to <main>,
+      // which would swallow the card link. In manual mode the auto-pan is
+      // already frozen, so panning can begin after a tiny nudge; in auto mode
+      // we wait a larger threshold so a light touch doesn't freeze the wall.
+      let dragging = false;
+      const dragThreshold = manualRef.current ? 4 : 10;
 
       const move = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
@@ -319,11 +355,13 @@ export default function ShowcaseWall({ recipes }: { recipes: WallRecipe[] }) {
         lastT = now;
         dragMoved.current += Math.abs(dx) + Math.abs(dy);
 
-        // Stay in auto-pan until the finger actually moves — a tap must still
-        // open a card, and we don't want a light touch to freeze the wall.
         if (!dragging) {
-          if (dragMoved.current < 10) return;
-          enterManual();
+          if (dragMoved.current < dragThreshold) return;
+          if (!manualRef.current) enterManual();
+          // Capture only now that it's a real drag, so moves keep flowing even
+          // if the finger leaves the element. Taps never reach here, so their
+          // click still lands on the card link.
+          target.setPointerCapture?.(pointerId);
           dragging = true;
         }
 

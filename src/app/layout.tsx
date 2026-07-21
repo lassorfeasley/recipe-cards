@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Playwrite_DE_VA } from "next/font/google";
 import "./globals.css";
 import { getSiteUrl } from "@/lib/og";
 
@@ -11,6 +11,14 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// Handwriting face for the recipe-card typography. Playwrite DE VA ships no
+// named subsets, so next/font exposes neither `subsets` nor `preload` for it
+// (preloading is handled automatically); it loads on demand via `display: swap`.
+const playwriteCard = Playwrite_DE_VA({
+  variable: "--font-card",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -43,7 +51,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} ${playwriteCard.variable} antialiased`}
+      >
         {children}
       </body>
     </html>

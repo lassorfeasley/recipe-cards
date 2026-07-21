@@ -31,33 +31,133 @@ const TIME_RANGES: { id: string; label: string; test: (m: number) => boolean }[]
 /** Title-case a lowercase category tag for display, e.g. "dessert" → "Dessert". */
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** A bordered toggle chip used in the advanced-filters panel. */
-function FilterPill({
-  active,
-  onClick,
-  label,
-  count,
-}: {
-  active: boolean;
-  onClick: () => void;
+interface Option {
+  value: string;
   label: string;
   count?: number;
+}
+
+/**
+ * A dropdown combo box that allows selecting any number of options. The
+ * trigger summarizes the selection ("Meal type", "Dessert", or "Meal type · 3")
+ * and the panel is a checklist. Closes on outside click or Escape.
+ */
+function MultiSelect({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: Option[];
+  selected: string[];
+  onChange: (next: string[]) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const toggle = (value: string) =>
+    onChange(
+      selected.includes(value)
+        ? selected.filter((v) => v !== value)
+        : [...selected, value]
+    );
+
+  const summary =
+    selected.length === 0
+      ? label
+      : selected.length === 1
+        ? (options.find((o) => o.value === selected[0])?.label ?? label)
+        : `${label} · ${selected.length}`;
+
+  const active = selected.length > 0;
+
   return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      className={`flex items-center gap-1.5 whitespace-nowrap border px-3 py-1.5 text-xs transition-colors ${
-        active
-          ? "border-zinc-100 bg-zinc-100 font-medium text-zinc-900"
-          : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
-      }`}
-    >
-      {label}
-      {count != null && (
-        <span className={active ? "text-zinc-500" : "text-zinc-600"}>{count}</span>
+    <div ref={ref} className="relative w-full md:w-auto md:shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={`flex h-9 w-full items-center gap-1.5 border bg-zinc-900 px-3 text-sm transition-colors md:w-auto ${
+          active
+            ? "border-zinc-400 text-zinc-100"
+            : "border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white"
+        }`}
+      >
+        <span className="flex-1 truncate text-left">{summary}</span>
+        <svg
+          viewBox="0 0 12 12"
+          aria-hidden
+          className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
+          <path d="M2.5 4.5 6 8l3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-multiselectable
+          className="absolute left-0 right-0 z-50 mt-1 max-h-72 overflow-auto border border-zinc-700 bg-zinc-950 py-1 shadow-xl md:right-auto md:min-w-56"
+        >
+          {options.map((o) => {
+            const isSel = selected.includes(o.value);
+            return (
+              <button
+                key={o.value}
+                role="option"
+                aria-selected={isSel}
+                onClick={() => toggle(o.value)}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-800"
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center border ${
+                    isSel ? "border-zinc-100 bg-zinc-100 text-zinc-900" : "border-zinc-600"
+                  }`}
+                >
+                  {isSel && (
+                    <svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M2.5 6.5 5 9l4.5-5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </span>
+                <span className="flex-1 truncate">{o.label}</span>
+                {o.count != null && (
+                  <span className="text-xs text-zinc-500">{o.count}</span>
+                )}
+              </button>
+            );
+          })}
+          {active && (
+            <button
+              onClick={() => onChange([])}
+              className="mt-1 w-full border-t border-zinc-800 px-3 py-2 text-left text-xs text-zinc-400 transition-colors hover:text-white"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -123,14 +223,13 @@ interface FlyingCard {
  */
 export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const [query, setQuery] = useState("");
-  // Selected category; null = every category. Single-select combo box.
-  const [category, setCategory] = useState<string | null>(null);
-  // Selected owner (recipe box); null = show every owner's cards.
-  const [owner, setOwner] = useState<string | null>(null);
-  // Selected time-to-cook bucket id (see TIME_RANGES); null = any duration.
-  const [timeRange, setTimeRange] = useState<string | null>(null);
-  // Whether the advanced-filters panel is expanded below the top row.
-  const [showFilters, setShowFilters] = useState(false);
+  // Multi-select filters — each is an array of chosen values; empty = no
+  // constraint on that dimension. Within a dimension the values are OR'd;
+  // across dimensions they're AND'd.
+  const [categories, setCategories] = useState<string[]>([]);
+  const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
+  // Chosen time-to-cook bucket ids (see TIME_RANGES).
+  const [timeRanges, setTimeRanges] = useState<string[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   // Measured height of the fixed top nav — the card-pile geometry is derived
@@ -175,8 +274,8 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     []
   );
 
-  // Owners present in the data, with their card counts. The toggle only
-  // appears when there's more than one box to switch between.
+  // Owners present in the data, with their card counts. The recipe-box combo
+  // box only appears when there's more than one box to choose between.
   const owners = useMemo(() => {
     const counts = new Map<string, number>();
     for (const e of entries) {
@@ -186,38 +285,45 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [entries]);
 
+  // True when this card belongs to one of the chosen recipe boxes (or none are
+  // chosen). Reused by the count memos and the match filter.
+  const inSelectedOwners = (collection: string | null) =>
+    selectedOwners.length === 0 || selectedOwners.includes(collection ?? "");
+
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const e of entries) {
-      if (owner && (e.collection ?? null) !== owner) continue;
+      if (selectedOwners.length && !selectedOwners.includes(e.collection ?? "")) continue;
       const c = e.category ?? "uncategorized";
       counts.set(c, (counts.get(c) ?? 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [entries, owner]);
+  }, [entries, selectedOwners]);
 
-  // Card counts per time bucket, scoped to the selected owner (matching how
-  // categoryCounts is scoped) so the panel shows how many recipes each range
-  // would surface.
+  // Card counts per time bucket, scoped to the selected recipe boxes (matching
+  // how categoryCounts is scoped) so each option shows how many it would surface.
   const timeCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const e of entries) {
-      if (owner && (e.collection ?? null) !== owner) continue;
+      if (selectedOwners.length && !selectedOwners.includes(e.collection ?? "")) continue;
       if (e.totalMinutes == null) continue;
       const r = TIME_RANGES.find((rr) => rr.test(e.totalMinutes!));
       if (r) counts.set(r.id, (counts.get(r.id) ?? 0) + 1);
     }
     return counts;
-  }, [entries, owner]);
+  }, [entries, selectedOwners]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const range = timeRange ? TIME_RANGES.find((r) => r.id === timeRange) : null;
+    const ranges = timeRanges
+      .map((id) => TIME_RANGES.find((r) => r.id === id))
+      .filter((r): r is (typeof TIME_RANGES)[number] => r != null);
     return entries.filter((e) => {
-      if (owner && (e.collection ?? null) !== owner) return false;
-      if (category && (e.category ?? "uncategorized") !== category) return false;
-      if (range) {
-        if (e.totalMinutes == null || !range.test(e.totalMinutes)) return false;
+      if (selectedOwners.length && !selectedOwners.includes(e.collection ?? "")) return false;
+      if (categories.length && !categories.includes(e.category ?? "uncategorized")) return false;
+      if (ranges.length) {
+        if (e.totalMinutes == null) return false;
+        if (!ranges.some((r) => r.test(e.totalMinutes!))) return false;
       }
       if (!q) return true;
       return (
@@ -226,7 +332,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         (e.ingredients ?? []).some((ing) => ing.includes(q))
       );
     });
-  }, [entries, query, category, owner, timeRange]);
+  }, [entries, query, categories, selectedOwners, timeRanges]);
 
   /** Snapshot the on-screen position of every visible card, keyed by id.
       The list renders one <a> per match in order, so pair them by index. */
@@ -529,39 +635,40 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     flightTimers.current.add(timer);
   }, [matches]);
 
-  const selectCategory = (value: string | null) => {
-    if (value === category) return;
+  // Each combo box captures the on-screen card rects before its change so the
+  // fly-out/in animation has last-frame positions to work from.
+  const changeCategories = (next: string[]) => {
     captureRects();
-    setCategory(value);
+    setCategories(next);
   };
-
-  const selectTimeRange = (value: string | null) => {
-    if (value === timeRange) return;
+  const changeTimeRanges = (next: string[]) => {
     captureRects();
-    setTimeRange(value);
+    setTimeRanges(next);
+  };
+  const changeOwners = (next: string[]) => {
+    captureRects();
+    setSelectedOwners(next);
   };
 
   const clearFilters = () => {
     captureRects();
     setQuery("");
-    setCategory(null);
-    setTimeRange(null);
+    setCategories([]);
+    setTimeRanges([]);
+    setSelectedOwners([]);
   };
 
-  const selectOwner = (value: string | null) => {
-    if (value === owner) return;
-    captureRects();
-    setOwner(value);
-  };
+  const filtered =
+    query.trim() !== "" ||
+    categories.length > 0 ||
+    timeRanges.length > 0 ||
+    selectedOwners.length > 0;
 
-  const filtered = query.trim() !== "" || category !== null || timeRange !== null;
-  // Active filters living inside the advanced panel — drives the button badge.
-  const advancedCount = (category !== null ? 1 : 0) + (timeRange !== null ? 1 : 0);
-
-  // Count shown in "N of M cards": M is scoped to the selected owner.
-  const ownerTotal = owner
-    ? (owners.find(([name]) => name === owner)?.[1] ?? entries.length)
-    : entries.length;
+  // Count shown in "N of M cards": M is scoped to the selected recipe boxes.
+  const ownerTotal =
+    selectedOwners.length > 0
+      ? entries.filter((e) => inSelectedOwners(e.collection)).length
+      : entries.length;
 
   const clearInline = filtered ? (
     <>
@@ -575,111 +682,21 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     </>
   ) : null;
 
-  const ownerToggle =
-    owners.length >= 2 ? (
-      <div className="flex shrink-0 divide-x divide-zinc-700 border border-zinc-700">
-        {[
-          { label: "All", value: null as string | null },
-          ...owners.map(([name]) => ({ label: name, value: name as string | null })),
-        ].map(({ label, value }) => {
-          const active = owner === value;
-          return (
-            <button
-              key={label}
-              onClick={() => selectOwner(value)}
-              aria-pressed={active}
-              className={`flex-1 whitespace-nowrap px-3 py-1.5 text-center text-xs transition-colors ${
-                active
-                  ? "bg-zinc-100 font-medium text-zinc-900"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-              }`}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-    ) : null;
-
-  const filtersButton = (
-    <button
-      onClick={() => setShowFilters((v) => !v)}
-      aria-expanded={showFilters}
-      className={`flex h-9 shrink-0 items-center gap-1.5 border px-3 text-sm transition-colors ${
-        showFilters || advancedCount > 0
-          ? "border-zinc-400 text-zinc-100"
-          : "border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white"
-      }`}
-    >
-      Filters
-      {advancedCount > 0 && (
-        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-100 px-1 text-[10px] font-semibold text-zinc-900">
-          {advancedCount}
-        </span>
-      )}
-      <svg
-        viewBox="0 0 12 12"
-        aria-hidden
-        className={`h-3 w-3 transition-transform ${showFilters ? "rotate-180" : ""}`}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      >
-        <path d="M2.5 4.5 6 8l3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </button>
-  );
-
-  const filtersPanel = showFilters ? (
-    <div className="mx-auto mt-3 flex max-w-5xl flex-col gap-3 border-t border-zinc-800/80 px-4 pt-3">
-      <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:gap-3">
-        <span className="w-24 shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
-          Meal type
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          <FilterPill active={category === null} onClick={() => selectCategory(null)} label="All" />
-          {categoryCounts.map(([c, n]) => (
-            <FilterPill
-              key={c}
-              active={category === c}
-              onClick={() => selectCategory(c)}
-              label={cap(c)}
-              count={n}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:gap-3">
-        <span className="w-24 shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500">
-          Time to cook
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          <FilterPill active={timeRange === null} onClick={() => selectTimeRange(null)} label="Any" />
-          {TIME_RANGES.map((r) => (
-            <FilterPill
-              key={r.id}
-              active={timeRange === r.id}
-              onClick={() => selectTimeRange(r.id)}
-              label={r.label}
-              count={timeCounts.get(r.id) ?? 0}
-            />
-          ))}
-        </div>
-      </div>
-
-      {advancedCount > 0 && (
-        <div>
-          <button
-            onClick={clearFilters}
-            className="text-xs text-zinc-400 underline underline-offset-2 hover:text-white"
-          >
-            Reset filters
-          </button>
-        </div>
-      )}
-    </div>
-  ) : null;
+  const categoryOptions: Option[] = categoryCounts.map(([c, n]) => ({
+    value: c,
+    label: cap(c),
+    count: n,
+  }));
+  const timeOptions: Option[] = TIME_RANGES.map((r) => ({
+    value: r.id,
+    label: r.label,
+    count: timeCounts.get(r.id) ?? 0,
+  }));
+  const ownerOptions: Option[] = owners.map(([name, n]) => ({
+    value: name,
+    label: name,
+    count: n,
+  }));
 
   return (
     <div className="mx-auto max-w-5xl px-4">
@@ -691,18 +708,6 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 pb-3 pt-[max(0.6rem,env(safe-area-inset-top))] backdrop-blur"
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 md:flex-row md:flex-wrap md:items-center md:gap-3">
-          {/* title + (mobile-only) count; on desktop the wrapper flattens so
-              the title sits inline with the controls */}
-          <div className="flex items-center justify-between gap-3 md:contents">
-            <h1 className="whitespace-nowrap text-[10px] font-medium uppercase tracking-[0.35em] text-zinc-500 md:text-xs">
-              Recipe Index
-            </h1>
-            <p className="text-xs text-zinc-500 md:hidden">
-              {matches.length} of {ownerTotal}
-              {clearInline}
-            </p>
-          </div>
-
           <input
             type="search"
             value={query}
@@ -714,16 +719,36 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             className="h-9 min-w-0 flex-1 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400 md:min-w-[14rem] md:text-sm"
           />
 
-          {ownerToggle}
-          {filtersButton}
-
-          <p className="hidden shrink-0 whitespace-nowrap text-xs text-zinc-500 md:block">
-            {matches.length} of {ownerTotal} cards
-            {clearInline}
-          </p>
+          <MultiSelect
+            label="Meal type"
+            options={categoryOptions}
+            selected={categories}
+            onChange={changeCategories}
+          />
+          <MultiSelect
+            label="Time to cook"
+            options={timeOptions}
+            selected={timeRanges}
+            onChange={changeTimeRanges}
+          />
+          {owners.length >= 2 && (
+            <MultiSelect
+              label="Recipe box"
+              options={ownerOptions}
+              selected={selectedOwners}
+              onChange={changeOwners}
+            />
+          )}
         </div>
-        {filtersPanel}
       </nav>
+
+      {/* Discreet card count, tucked into the bottom-left over the dark page.
+          Fixed so it stays put as the pile scrolls; a faint backdrop keeps it
+          legible when a white card slides behind it. */}
+      <p className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-4 z-30 whitespace-nowrap rounded-full border border-zinc-800/80 bg-zinc-950/80 px-2.5 py-1 text-xs text-zinc-500 backdrop-blur">
+        {matches.length} of {ownerTotal} cards
+        {clearInline}
+      </p>
 
       {/* the list. The end-of-scroll room must be a real child of this div
           (not padding — sticky containment only spans the content box), so
@@ -757,7 +782,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                 className="flex items-center justify-between gap-4"
                 style={{ height: MIN_H }}
               >
-                <span className="truncate text-lg font-medium tracking-tight">{r.title}</span>
+                <span className="font-card truncate text-lg tracking-tight">{r.title}</span>
                 <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-400">
                   {r.category ?? ""}
                 </span>
@@ -827,7 +852,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                 className="flex items-center justify-between gap-4"
                 style={{ height: MIN_H }}
               >
-                <span className="truncate text-lg font-medium tracking-tight text-zinc-900">
+                <span className="font-card truncate text-lg tracking-tight text-zinc-900">
                   {f.title}
                 </span>
                 <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-400">
