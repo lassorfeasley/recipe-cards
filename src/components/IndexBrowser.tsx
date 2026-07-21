@@ -238,6 +238,8 @@ interface FlyingCard {
  */
 export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const [query, setQuery] = useState("");
+  // Mobile-only disclosure for the filter combo boxes; md+ always shows them.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   // Multi-select filters — each is an array of chosen values; empty = no
   // constraint on that dimension. Within a dimension the values are OR'd;
   // across dimensions they're AND'd.
@@ -716,7 +718,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   }));
 
   return (
-    <div className="mx-auto max-w-5xl px-4">
+    <div className="mx-auto max-w-5xl px-2 md:px-4">
       {/* Full-width top nav. position:fixed (not sticky) so iOS Safari can't
           detach it while the URL bar collapses mid-scroll; the card pile pins
           just below its measured height on every breakpoint. */}
@@ -725,6 +727,8 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 pb-3 pt-[max(0.6rem,env(safe-area-inset-top))] backdrop-blur"
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 md:flex-row md:flex-wrap md:items-center md:gap-3">
+          {/* flex-1 only at md: — in the mobile column layout a 0% flex basis
+              on the vertical axis would override h-9 and squash the input. */}
           <input
             type="search"
             value={query}
@@ -733,29 +737,53 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
               setQuery(e.target.value);
             }}
             placeholder="Search recipes…"
-            className="h-9 min-w-0 flex-1 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400 md:min-w-[14rem] md:text-sm"
+            className="h-9 min-w-0 rounded-none border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-zinc-400 md:min-w-[14rem] md:flex-1 md:text-sm"
           />
 
-          <MultiSelect
-            label="Meal type"
-            options={categoryOptions}
-            selected={categories}
-            onChange={changeCategories}
-          />
-          <MultiSelect
-            label="Time to cook"
-            options={timeOptions}
-            selected={timeRanges}
-            onChange={changeTimeRanges}
-          />
-          {owners.length >= 2 && (
+          {/* Mobile-only disclosure — the combo boxes hide behind it to keep
+              the fixed nav short; md+ always shows them inline. */}
+          <button
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            className="flex h-7 items-center gap-1.5 self-start px-1 text-sm text-zinc-400 transition-colors hover:text-white md:hidden"
+          >
+            More filters
+            <svg
+              viewBox="0 0 12 12"
+              aria-hidden
+              className={`h-3 w-3 shrink-0 transition-transform ${filtersOpen ? "rotate-180" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <path d="M2.5 4.5 6 8l3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+
+          <div
+            className={`${filtersOpen ? "flex" : "hidden"} flex-col gap-2 md:contents`}
+          >
             <MultiSelect
-              label="Recipe box"
-              options={ownerOptions}
-              selected={selectedOwners}
-              onChange={changeOwners}
+              label="Meal type"
+              options={categoryOptions}
+              selected={categories}
+              onChange={changeCategories}
             />
-          )}
+            <MultiSelect
+              label="Time to cook"
+              options={timeOptions}
+              selected={timeRanges}
+              onChange={changeTimeRanges}
+            />
+            {owners.length >= 2 && (
+              <MultiSelect
+                label="Recipe box"
+                options={ownerOptions}
+                selected={selectedOwners}
+                onChange={changeOwners}
+              />
+            )}
+          </div>
         </div>
       </nav>
 
