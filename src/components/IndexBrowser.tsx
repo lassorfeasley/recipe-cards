@@ -718,7 +718,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   }));
 
   return (
-    <div className="mx-auto max-w-5xl px-2 md:px-4">
+    <div className="mx-auto max-w-5xl px-4">
       {/* Full-width top nav. position:fixed (not sticky) so iOS Safari can't
           detach it while the URL bar collapses mid-scroll; the card pile pins
           just below its measured height on every breakpoint. */}
