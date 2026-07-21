@@ -10,7 +10,7 @@ export interface IndexEntry {
   category: string | null;
   attribution: string | null;
   ingredients: string[] | null;
-  /** Owner / physical recipe box this card came from, e.g. "Phebe Butler". */
+  /** Owner / physical recipe box this card came from, e.g. "Phoebe Butler". */
   collection: string | null;
   /** Estimated total time in minutes (active + passive). Null when unknown. */
   totalMinutes: number | null;
