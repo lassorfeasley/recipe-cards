@@ -92,34 +92,6 @@ function startsFlipped(id: string): boolean {
   return (h & 1) === 1;
 }
 
-/** Max card tilt, in degrees (± this). */
-const TILT_DEG = 2;
-/** Max per-card offset, in px (± this on each axis) — jitters the spacing. */
-const NUDGE_PX = 5;
-
-/**
- * Deterministic "hand-placed" jitter per card: a small rotation and a sub-cell
- * nudge, derived from the id hash so the server/client render and all four
- * tiled copies agree (identical ids → identical jitter, so the tiling seams
- * stay seamless). Uses the CSS `rotate`/`translate` individual properties so it
- * layers on top of the hover `scale` and the flip-wave `transform` without
- * either overriding the other. The nudge only shifts the card within its fixed
- * grid cell, so track sizes — and thus the pan measurements — are untouched.
- */
-function cardJitter(id: string): { rotate: string; translate: string } {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  const rand = (salt: number) =>
-    ((Math.imul(h ^ salt, 2654435761) >>> 0) % 1000) / 1000; // [0,1)
-  const rot = (rand(0x9e3779b9) * 2 - 1) * TILT_DEG;
-  const tx = (rand(0x85ebca6b) * 2 - 1) * NUDGE_PX;
-  const ty = (rand(0xc2b2ae35) * 2 - 1) * NUDGE_PX;
-  return {
-    rotate: `${rot.toFixed(2)}deg`,
-    translate: `${tx.toFixed(1)}px ${ty.toFixed(1)}px`,
-  };
-}
-
 /** Viewport columns per Tailwind breakpoint (sm/md/lg/xl). */
 function visibleCols(viewportWidth: number): number {
   if (viewportWidth >= 1280) return 9;
@@ -179,7 +151,6 @@ function CardGrid({
         // backs at all times. face-front is visible at rest; face-back is
         // pre-mirrored so it reads correctly while the parent is rotated 180°.
         const flipped = startsFlipped(r.id);
-        const jitter = cardJitter(r.id);
         const faceFront =
           "face-front absolute inset-0 h-full w-full rounded object-contain transition-shadow duration-200 group-hover:shadow-[0_8px_40px_rgba(255,220,150,0.15)]";
         const faceBack =
@@ -191,7 +162,6 @@ function CardGrid({
             title={r.title}
             tabIndex={hidden ? -1 : undefined}
             className="group relative block aspect-[5/3] transition-transform duration-200 ease-out hover:z-10 hover:scale-[1.06] focus-visible:z-10 focus-visible:scale-[1.06]"
-            style={{ rotate: jitter.rotate, translate: jitter.translate }}
           >
             {lite ? (
               // Mobile/low-power: a single static front face. No per-card

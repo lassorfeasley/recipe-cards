@@ -31,6 +31,19 @@ const TIME_RANGES: { id: string; label: string; test: (m: number) => boolean }[]
 /** Title-case a lowercase category tag for display, e.g. "dessert" → "Dessert". */
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Max lean for piled index cards, in degrees (±) — small, so the stack reads
+    as hand-tossed rather than chaotic. */
+const STACK_TILT_DEG = 2.2;
+
+/** Deterministic small rotation (degrees) per card id, so each card keeps the
+    same lean every render and as it scrolls through the pile. */
+function cardTilt(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  const r = ((Math.imul(h ^ 0x9e3779b9, 2654435761) >>> 0) % 1000) / 1000;
+  return (r * 2 - 1) * STACK_TILT_DEG;
+}
+
 interface Option {
   value: string;
   label: string;
@@ -213,6 +226,8 @@ interface FlyingCard {
   dir: -1 | 1;
   delay: number;
   mode: "out" | "in";
+  /** Resting lean (deg) so the clone matches the card it stands in for. */
+  rotate: number;
 }
 
 /**
@@ -584,6 +599,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
       delay: i * 25,
       mode: "out" as const,
+      rotate: cardTilt(entry.id),
     }));
     const inFlyers: FlyingCard[] = addedCapped.map(({ entry, rect }, i) => ({
       key: `${entry.id}-in-${stamp}`,
@@ -597,6 +613,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
       delay: i * 25,
       mode: "in" as const,
+      rotate: cardTilt(entry.id),
     }));
 
     if (inFlyers.length > 0) {
@@ -771,37 +788,53 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             <Link
               key={r.id}
               href={`/card/${r.slug}`}
-              className="sticky block w-full max-w-[575px] shrink-0 self-center overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)] outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-white"
+              className="group sticky block w-full max-w-[575px] shrink-0 self-center outline-none"
               style={{
                 height: MIN_H,
                 top: stackTop,
                 visibility: flyingInIds.has(r.id) ? "hidden" : undefined,
               }}
             >
-              <span
-                className="flex items-center justify-between gap-4"
-                style={{ height: MIN_H }}
+              {/* The card visual + its off-kilter lean live on this inner
+                  wrapper, not the sticky <a>. Rotating a child leaves the <a>'s
+                  own box axis-aligned, so the scroll-driven pile/fisheye code
+                  that reads its getBoundingClientRect stays exact.
+
+                  It's absolutely positioned at full 3×5 height (aspect-[5/3]),
+                  bleeding below the <a>'s short flow box. Later cards paint on
+                  top, so how much of each card shows is set by the gap to the
+                  next card (the fisheye height on the <a>), while the always-
+                  full body means neighbours overlap — no black ever shows
+                  through the tilt gaps. */}
+              <div
+                className="absolute inset-x-0 top-0 aspect-[5/3] overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)] transition-colors group-hover:bg-zinc-50 group-focus-visible:ring-2 group-focus-visible:ring-white"
+                style={{ rotate: `${cardTilt(r.id)}deg` }}
               >
-                <span className="font-card truncate text-lg tracking-tight">{r.title}</span>
-                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-400">
-                  {r.category ?? ""}
+                <span
+                  className="flex items-center justify-between gap-4"
+                  style={{ height: MIN_H }}
+                >
+                  <span className="font-card truncate text-lg tracking-tight">{r.title}</span>
+                  <span className="font-card shrink-0 text-sm lowercase text-zinc-400">
+                    {r.category ?? ""}
+                  </span>
                 </span>
-              </span>
-              {/* blank index-card body: light blue ruled lines under the red
-                  header rule */}
-              <span
-                className="pointer-events-none absolute inset-x-0 bottom-0"
-                style={{
-                  top: MIN_H,
-                  background:
-                    "repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(112, 146, 190, 0.35) 23px, rgba(112, 146, 190, 0.35) 24px)",
-                }}
-              />
-              {/* the index card's red header rule — full bleed, doubles as the row separator */}
-              <span
-                className="pointer-events-none absolute inset-x-0 z-10 h-px bg-[#c45850]/40"
-                style={{ top: MIN_H - 1 }}
-              />
+                {/* blank index-card body: light blue ruled lines under the red
+                    header rule */}
+                <span
+                  className="pointer-events-none absolute inset-x-0 bottom-0"
+                  style={{
+                    top: MIN_H,
+                    background:
+                      "repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(112, 146, 190, 0.35) 23px, rgba(112, 146, 190, 0.35) 24px)",
+                  }}
+                />
+                {/* the index card's red header rule — full bleed, doubles as the row separator */}
+                <span
+                  className="pointer-events-none absolute inset-x-0 z-10 h-px bg-[#c45850]/40"
+                  style={{ top: MIN_H - 1 }}
+                />
+              </div>
             </Link>
           ))
         )}
@@ -834,6 +867,9 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                 left: f.left,
                 width: f.width,
                 height: f.height,
+                // Match the resting lean; the fly keyframes drive `transform`,
+                // so this individual `rotate` composes without being clobbered.
+                rotate: `${f.rotate}deg`,
                 animationName:
                   f.mode === "in"
                     ? f.dir < 0
@@ -855,7 +891,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                 <span className="font-card truncate text-lg tracking-tight text-zinc-900">
                   {f.title}
                 </span>
-                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-400">
+                <span className="font-card shrink-0 text-sm lowercase text-zinc-400">
                   {f.category ?? ""}
                 </span>
               </span>
