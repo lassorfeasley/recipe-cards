@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Playwrite_DE_VA } from "next/font/google";
 import "./globals.css";
 import { getSiteUrl } from "@/lib/og";
@@ -20,6 +20,14 @@ const playwriteCard = Playwrite_DE_VA({
   variable: "--font-card",
   display: "swap",
 });
+
+// viewport-fit=cover keeps iOS Safari from letterboxing the page in landscape
+// on notched/Dynamic-Island phones — an inset that can wrongly persist after
+// rotating back to portrait, leaving the in-flow content ~50pt too narrow.
+// Edge-hugging containers compensate with env(safe-area-inset-*) padding.
+export const viewport: Viewport = {
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(getSiteUrl()),

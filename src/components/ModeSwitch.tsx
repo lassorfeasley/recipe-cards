@@ -57,7 +57,7 @@ export default function ModeSwitch() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed right-5 bottom-5 z-40 flex items-center gap-2 rounded-2xl border border-zinc-800/80 bg-black/70 p-1.5 backdrop-blur">
+    <nav className="fixed right-[max(1.25rem,env(safe-area-inset-right))] bottom-[max(1.25rem,env(safe-area-inset-bottom))] z-40 flex items-center gap-2 rounded-2xl border border-zinc-800/80 bg-black/70 p-1.5 backdrop-blur">
       {MODES.map((m) => {
         const active =
           m.href === "/" ? pathname === "/" : pathname.startsWith(m.href);

@@ -57,7 +57,7 @@ export default async function RecipePage({ params }: { params: Promise<{ slug: s
     : null;
 
   return (
-    <main className="px-4 pb-24 pt-16 sm:px-6">
+    <main className="pb-24 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-16 sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))]">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(recipeJsonLd(recipe)) }}
