@@ -280,6 +280,12 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const focusTop = stackTop + MIN_H / 2;
 
   const [flying, setFlying] = useState<FlyingCard[]>([]);
+  // Geometry for the full-bleed fly-in clip layer, captured when a batch
+  // spawns. `left` shifts the layer (an absolute child of the column-width
+  // wrapper) so its left edge lands on the viewport's content origin, and
+  // `width` uses clientWidth — the content width *excluding* the scrollbar —
+  // so the layer never overflows and no phantom horizontal scrollbar flickers.
+  const [flyInClip, setFlyInClip] = useState<{ left: number; width: number } | null>(null);
   // Ids of cards currently sailing back in: the real row is held invisible at
   // its landing spot until its clone lands, so the entrance isn't doubled.
   const [flyingInIds, setFlyingInIds] = useState<Set<string>>(new Set());
@@ -591,11 +597,12 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       }
     }
     const addedCapped = added.slice(0, MAX_FLYERS);
-    // Fly-in clones live inside the pile's stacking context, so their coords
-    // are local to that box, not the viewport. Subtract its origin.
+    // Fly-in clones live in the pile's stacking context. Their clip layer is
+    // full-bleed (its left edge sits at the viewport's, so `left` stays in
+    // viewport space) but starts at the wrapper's top, so `top` is measured
+    // from there — subtract the wrapper's top to convert.
     const wrapRect = wrapRef.current?.getBoundingClientRect();
     const wrapTop = wrapRect?.top ?? 0;
-    const wrapLeft = wrapRect?.left ?? 0;
 
     if (removed.length === 0 && addedCapped.length === 0) return;
     const stamp = ++flightSeq.current;
@@ -622,7 +629,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       title: entry.title,
       category: entry.category,
       top: rect.top - wrapTop,
-      left: rect.left - wrapLeft,
+      left: rect.left,
       width: rect.width,
       height: Math.max(rect.height, Math.round(rect.width * (3 / 5))),
       dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
@@ -639,6 +646,10 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         const next = new Set(prevSet);
         for (const f of inFlyers) next.add(f.id);
         return next;
+      });
+      setFlyInClip({
+        left: -(wrapRect?.left ?? 0),
+        width: document.documentElement.clientWidth,
       });
     }
     setFlying((f) => [...f, ...outFlyers, ...inFlyers]);
@@ -967,11 +978,15 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
             pile's stacking context (not the top overlay), each carrying its
             landing row's z-index, so they thread between the resting cards
             for the whole flight instead of floating over the pile until they
-            land. overflow-hidden clips the off-column part of the arc. */}
+            land. Full-bleed to the viewport via measured left/width (no
+            transform/fixed, so it stays in this stacking context) so the arc
+            spans the whole screen like the fly-out; overflow-hidden clips it
+            at the content edges without spilling past the scrollbar. */}
         {flying.some((f) => f.mode === "in") && (
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-0 overflow-hidden"
+            className="pointer-events-none absolute top-0 bottom-0 overflow-hidden"
+            style={{ left: flyInClip?.left ?? 0, width: flyInClip?.width ?? "100%" }}
           >
             {flying.filter((f) => f.mode === "in").map((f) => renderFlyer(f))}
           </div>
