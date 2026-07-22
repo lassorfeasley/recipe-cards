@@ -228,6 +228,10 @@ interface FlyingCard {
   mode: "out" | "in";
   /** Resting lean (deg) so the clone matches the card it stands in for. */
   rotate: number;
+  /** Landing rank (index in `matches`) for "in" clones, so the returning card
+      shares its real row's z-index and slots between neighbours mid-flight.
+      Unused for "out" clones, which sail off on the top overlay. */
+  zIndex?: number;
 }
 
 /**
@@ -249,6 +253,10 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
   const [timeRanges, setTimeRanges] = useState<string[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
+  // The stacking context that holds both the real rows and the fly-in clones,
+  // so a returning clone can slot between rows by z-index. Its rect converts
+  // captured viewport coords into this context's local (document) space.
+  const wrapRef = useRef<HTMLDivElement>(null);
   // Measured height of the fixed top nav — the card-pile geometry is derived
   // from it (position:fixed, since sticky is unreliable in iOS Safari when the
   // URL bar collapses mid-scroll).
@@ -574,15 +582,20 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     const anchors = list
       ? (Array.from(list.children).filter((el) => el.tagName === "A") as HTMLElement[])
       : [];
-    const added: { entry: IndexEntry; rect: DOMRect }[] = [];
+    const added: { entry: IndexEntry; rect: DOMRect; index: number }[] = [];
     for (let i = 0; i < anchors.length && i < matches.length; i++) {
       if (prevIds.has(matches[i].id)) continue;
       const rect = anchors[i].getBoundingClientRect();
       if (rect.bottom > 0 && rect.top < window.innerHeight) {
-        added.push({ entry: matches[i], rect });
+        added.push({ entry: matches[i], rect, index: i });
       }
     }
     const addedCapped = added.slice(0, MAX_FLYERS);
+    // Fly-in clones live inside the pile's stacking context, so their coords
+    // are local to that box, not the viewport. Subtract its origin.
+    const wrapRect = wrapRef.current?.getBoundingClientRect();
+    const wrapTop = wrapRect?.top ?? 0;
+    const wrapLeft = wrapRect?.left ?? 0;
 
     if (removed.length === 0 && addedCapped.length === 0) return;
     const stamp = ++flightSeq.current;
@@ -603,19 +616,22 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       mode: "out" as const,
       rotate: cardTilt(entry.id),
     }));
-    const inFlyers: FlyingCard[] = addedCapped.map(({ entry, rect }, i) => ({
+    const inFlyers: FlyingCard[] = addedCapped.map(({ entry, rect, index }, i) => ({
       key: `${entry.id}-in-${stamp}`,
       id: entry.id,
       title: entry.title,
       category: entry.category,
-      top: rect.top,
-      left: rect.left,
+      top: rect.top - wrapTop,
+      left: rect.left - wrapLeft,
       width: rect.width,
       height: Math.max(rect.height, Math.round(rect.width * (3 / 5))),
       dir: (i % 2 === 0 ? -1 : 1) as -1 | 1,
       delay: i * 25,
       mode: "in" as const,
       rotate: cardTilt(entry.id),
+      // Same z-index the real row carries, so the clone paints between its
+      // neighbours the whole way in rather than on top of the pile.
+      zIndex: index,
     }));
 
     if (inFlyers.length > 0) {
@@ -717,8 +733,75 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     count: n,
   }));
 
+  // One flying clone. Shared by both overlays: fly-out clones sail off on the
+  // fixed top layer (coords are viewport-relative), while fly-in clones live
+  // inside the pile's stacking context (coords are wrap-relative) and carry a
+  // zIndex so they interleave with the real rows for the whole flight.
+  const renderFlyer = (f: FlyingCard) => (
+    <div
+      key={f.key}
+      onAnimationEnd={() => {
+        setFlying((cur) => cur.filter((x) => x.key !== f.key));
+        if (f.mode === "in") {
+          setFlyingInIds((prevSet) => {
+            const next = new Set(prevSet);
+            next.delete(f.id);
+            return next;
+          });
+        }
+      }}
+      className="index-card-fly absolute overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
+      style={{
+        top: f.top,
+        left: f.left,
+        width: f.width,
+        height: f.height,
+        zIndex: f.zIndex,
+        // Match the resting lean; the fly keyframes drive `transform`,
+        // so this individual `rotate` composes without being clobbered.
+        rotate: `${f.rotate}deg`,
+        animationName:
+          f.mode === "in"
+            ? f.dir < 0
+              ? "index-card-flyin-left"
+              : "index-card-flyin-right"
+            : f.dir < 0
+              ? "index-card-fly-left"
+              : "index-card-fly-right",
+        // Exits accelerate off (class default); entrances decelerate in.
+        animationTimingFunction:
+          f.mode === "in" ? "cubic-bezier(0.16, 1, 0.3, 1)" : undefined,
+        animationDelay: `${f.delay}ms`,
+      }}
+    >
+      <span
+        className="flex items-center justify-between gap-4"
+        style={{ height: MIN_H }}
+      >
+        <span className="font-card truncate text-lg tracking-tight text-zinc-900">
+          {f.title}
+        </span>
+        <span className="font-card shrink-0 text-sm lowercase text-zinc-400">
+          {f.category ?? ""}
+        </span>
+      </span>
+      <span
+        className="pointer-events-none absolute inset-x-0 bottom-0"
+        style={{
+          top: MIN_H,
+          background:
+            "repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(112, 146, 190, 0.35) 23px, rgba(112, 146, 190, 0.35) 24px)",
+        }}
+      />
+      <span
+        className="pointer-events-none absolute inset-x-0 z-10 h-px bg-[#c45850]/40"
+        style={{ top: MIN_H - 1 }}
+      />
+    </div>
+  );
+
   return (
-    <div className="mx-auto max-w-5xl px-4">
+    <div className="mx-auto max-w-5xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
       {/* Full-width top nav. position:fixed (not sticky) so iOS Safari can't
           detach it while the URL bar collapses mid-scroll; the card pile pins
           just below its measured height on every breakpoint. */}
@@ -726,7 +809,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         ref={headerRef}
         className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 pb-3 pt-[max(0.6rem,env(safe-area-inset-top))] backdrop-blur"
       >
-        <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 md:flex-row md:flex-wrap md:items-center md:gap-3">
+        <div className="mx-auto flex max-w-5xl flex-col gap-2 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:flex-row md:flex-wrap md:items-center md:gap-3">
           {/* flex-1 only at md: — in the mobile column layout a 0% flex basis
               on the vertical axis would override h-9 and squash the input. */}
           <input
@@ -790,11 +873,17 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
       {/* Discreet card count, tucked into the bottom-left over the dark page.
           Fixed so it stays put as the pile scrolls; a faint backdrop keeps it
           legible when a white card slides behind it. */}
-      <p className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-4 z-30 whitespace-nowrap rounded-full border border-zinc-800/80 bg-zinc-950/80 px-2.5 py-1 text-xs text-zinc-500 backdrop-blur">
+      <p className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] z-30 whitespace-nowrap rounded-full border border-zinc-800/80 bg-zinc-950/80 px-2.5 py-1 text-xs text-zinc-500 backdrop-blur">
         {matches.length} of {ownerTotal} cards
         {clearInline}
       </p>
 
+      {/* Pile stacking context. Holds the rows AND the fly-in clones so a
+          returning clone can carry the exact z-index of the row it's landing
+          on and thread between its neighbours the whole way in. z-index:0 keeps
+          the whole group beneath the z-30 nav/counter no matter how many rows
+          (and thus how high the inner z-indexes) there are. */}
+      <div ref={wrapRef} className="relative z-0">
       {/* the list. The end-of-scroll room must be a real child of this div
           (not padding — sticky containment only spans the content box), so
           the pile, including the last card fully expanded, stays pinned at
@@ -812,7 +901,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         {matches.length === 0 ? (
           <p className="pt-8 text-sm text-zinc-500">No recipes match.</p>
         ) : (
-          matches.map((r) => (
+          matches.map((r, i) => (
             <Link
               key={r.id}
               href={`/card/${r.slug}`}
@@ -820,6 +909,10 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
               style={{
                 height: MIN_H,
                 top: stackTop,
+                // Explicit stacking order (later card on top) matching the
+                // previous DOM-order paint — this is what fly-in clones align
+                // to via their own zIndex so they interleave correctly.
+                zIndex: i,
                 visibility: flyingInIds.has(r.id) ? "hidden" : undefined,
               }}
             >
@@ -870,73 +963,29 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         <div aria-hidden className="h-screen shrink-0" />
       </div>
 
-      {/* fly-out clones of cards that were just filtered away */}
-      {flying.length > 0 && (
+        {/* fly-in clones of cards that were just re-added. They sit in the
+            pile's stacking context (not the top overlay), each carrying its
+            landing row's z-index, so they thread between the resting cards
+            for the whole flight instead of floating over the pile until they
+            land. overflow-hidden clips the off-column part of the arc. */}
+        {flying.some((f) => f.mode === "in") && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 overflow-hidden"
+          >
+            {flying.filter((f) => f.mode === "in").map((f) => renderFlyer(f))}
+          </div>
+        )}
+      </div>
+
+      {/* fly-out clones of cards that were just filtered away — a fixed
+          full-viewport top layer so they sail all the way off every edge. */}
+      {flying.some((f) => f.mode === "out") && (
         <div
           aria-hidden
           className="pointer-events-none fixed inset-0 z-40 overflow-hidden"
         >
-          {flying.map((f) => (
-            <div
-              key={f.key}
-              onAnimationEnd={() => {
-                setFlying((cur) => cur.filter((x) => x.key !== f.key));
-                if (f.mode === "in") {
-                  setFlyingInIds((prevSet) => {
-                    const next = new Set(prevSet);
-                    next.delete(f.id);
-                    return next;
-                  });
-                }
-              }}
-              className="index-card-fly absolute overflow-hidden border-[0.5px] border-zinc-300 bg-white px-6 shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
-              style={{
-                top: f.top,
-                left: f.left,
-                width: f.width,
-                height: f.height,
-                // Match the resting lean; the fly keyframes drive `transform`,
-                // so this individual `rotate` composes without being clobbered.
-                rotate: `${f.rotate}deg`,
-                animationName:
-                  f.mode === "in"
-                    ? f.dir < 0
-                      ? "index-card-flyin-left"
-                      : "index-card-flyin-right"
-                    : f.dir < 0
-                      ? "index-card-fly-left"
-                      : "index-card-fly-right",
-                // Exits accelerate off (class default); entrances decelerate in.
-                animationTimingFunction:
-                  f.mode === "in" ? "cubic-bezier(0.16, 1, 0.3, 1)" : undefined,
-                animationDelay: `${f.delay}ms`,
-              }}
-            >
-              <span
-                className="flex items-center justify-between gap-4"
-                style={{ height: MIN_H }}
-              >
-                <span className="font-card truncate text-lg tracking-tight text-zinc-900">
-                  {f.title}
-                </span>
-                <span className="font-card shrink-0 text-sm lowercase text-zinc-400">
-                  {f.category ?? ""}
-                </span>
-              </span>
-              <span
-                className="pointer-events-none absolute inset-x-0 bottom-0"
-                style={{
-                  top: MIN_H,
-                  background:
-                    "repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(112, 146, 190, 0.35) 23px, rgba(112, 146, 190, 0.35) 24px)",
-                }}
-              />
-              <span
-                className="pointer-events-none absolute inset-x-0 z-10 h-px bg-[#c45850]/40"
-                style={{ top: MIN_H - 1 }}
-              />
-            </div>
-          ))}
+          {flying.filter((f) => f.mode === "out").map((f) => renderFlyer(f))}
         </div>
       )}
     </div>
