@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { TOP_NAV_H } from "@/components/TopNav";
 
 export interface IndexEntry {
   id: string;
@@ -276,7 +277,10 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
     };
   }, []);
 
-  const stackTop = headerH > 0 ? headerH + STACK_GAP : STACK_TOP_DESKTOP + STACK_GAP;
+  // The search bar sits below the shared TopNav, so the pile clears both the
+  // nav and the search bar's measured height.
+  const stackTop =
+    TOP_NAV_H + (headerH > 0 ? headerH : STACK_TOP_DESKTOP) + STACK_GAP;
   const focusTop = stackTop + MIN_H / 2;
 
   const [flying, setFlying] = useState<FlyingCard[]>([]);
@@ -789,7 +793,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         className="flex items-center justify-between gap-4"
         style={{ height: MIN_H }}
       >
-        <span className="font-card truncate text-lg tracking-tight text-zinc-900">
+        <span className="font-card truncate py-1 text-lg leading-[1.7] tracking-tight text-zinc-900">
           {f.title}
         </span>
         <span className="font-card shrink-0 text-sm lowercase text-zinc-400">
@@ -813,12 +817,14 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
 
   return (
     <div className="mx-auto max-w-5xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
-      {/* Full-width top nav. position:fixed (not sticky) so iOS Safari can't
-          detach it while the URL bar collapses mid-scroll; the card pile pins
-          just below its measured height on every breakpoint. */}
+      {/* Full-width search/filter bar, pinned just below the shared TopNav.
+          position:fixed (not sticky) so iOS Safari can't detach it while the
+          URL bar collapses mid-scroll; the card pile pins just below its
+          measured height on every breakpoint. */}
       <nav
         ref={headerRef}
-        className="fixed inset-x-0 top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 pb-3 pt-[max(0.6rem,env(safe-area-inset-top))] backdrop-blur"
+        style={{ top: TOP_NAV_H }}
+        className="fixed inset-x-0 z-30 border-b border-zinc-800/80 bg-zinc-950/95 pb-3 pt-3 backdrop-blur"
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-2 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:flex-row md:flex-wrap md:items-center md:gap-3">
           {/* flex-1 only at md: — in the mobile column layout a 0% flex basis
@@ -904,7 +910,8 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
         ref={listRef}
         className="flex min-w-0 flex-col"
         style={{
-          paddingTop: (headerH > 0 ? headerH : STACK_TOP_DESKTOP) + STACK_GAP + 4,
+          paddingTop:
+            TOP_NAV_H + (headerH > 0 ? headerH : STACK_TOP_DESKTOP) + STACK_GAP + 4,
           // Let single-finger scroll pass through while we own pinch gestures.
           touchAction: "pan-y",
         }}
@@ -946,7 +953,7 @@ export default function IndexBrowser({ entries }: { entries: IndexEntry[] }) {
                   className="flex items-center justify-between gap-4"
                   style={{ height: MIN_H }}
                 >
-                  <span className="font-card truncate text-lg tracking-tight">{r.title}</span>
+                  <span className="font-card truncate py-1 text-lg leading-[1.7] tracking-tight">{r.title}</span>
                   <span className="font-card shrink-0 text-sm lowercase text-zinc-400">
                     {r.category ?? ""}
                   </span>
